@@ -3,9 +3,9 @@
 smugmug_download.py — Pass 2 of the SmugMug → local photo-portfolio migration.
 
 Reads the frozen manifest.json emitted by smugmug_crawl.py and downloads every
-image's ArchivedUri (the untouched original) into a local photos/ tree. Only
-originals are pulled; all responsive sizes, WebP/AVIF, and thumbnails are
-generated downstream by the local asset pipeline.
+image's ArchivedUri (the untouched original) into the local content repo.
+Only originals are pulled; all responsive sizes, WebP/AVIF, and thumbnails
+are generated downstream by the local asset pipeline.
 
 ────────────────────────────────────────────────────────────────────────────
 Behavior
@@ -27,27 +27,34 @@ Behavior
 ────────────────────────────────────────────────────────────────────────────
 Layout
 ────────────────────────────────────────────────────────────────────────────
-Files land at:
+Files land in the local content repo at:
 
-    <photos_root>/<url_path_segments>/<filename>
+    <content_root>/<url_path_segments>/<filename>
 
-derived from each album's `url_path` (slug-friendly) and the image's
-SmugMug `FileName`. Filename collisions within an album are disambiguated
-by suffixing `__<ImageKey>` before the extension.
+`content_root` is read from `.config.yaml` at the repo root (see
+`.config.example.yaml`). Filenames are preserved as SmugMug returns them,
+with one normalization: case-insensitive collisions within an album are
+disambiguated by suffixing `__<ImageKey>` before the extension. This keeps
+the content repo portable across case-sensitive (Linux/R2) and
+case-insensitive (macOS APFS) filesystems.
 
-`photos/` should be in .gitignore — it's regenerable and will be ~110 GB.
+The content repo is the **canonical source of truth** for galleries
+post-migration — it is not regenerable. Make sure backup is configured
+for the content_root path before kicking off a full run.
 
 ────────────────────────────────────────────────────────────────────────────
 Usage
 ────────────────────────────────────────────────────────────────────────────
     # same four env vars as smugmug_crawl.py (OAuth 1.0a credentials)
-    python scripts/smugmug_download.py \\
-        --manifest manifest.json \\
-        --photos-root photos \\
-        --workers 8
 
-    # dry run / spot check — only first 50 images:
+    # spot-check first against the real content_root:
     python scripts/smugmug_download.py --limit 50 -v
+
+    # then full run:
+    python scripts/smugmug_download.py --workers 8
+
+    # override content_root from .config.yaml (e.g. for a throwaway test):
+    python scripts/smugmug_download.py --content-root /tmp/photos-test --limit 50
 
 ────────────────────────────────────────────────────────────────────────────
 Dependencies
@@ -141,6 +148,8 @@ def build_tasks(manifest: dict) -> list[DownloadTask]:
         )
         if not segments:
             continue
+        # Track case-insensitively so collisions are caught on
+        # both case-sensitive (Linux/R2) and case-insensitive (macOS) FS.
         used: dict[str, int] = {}
         for img in node.get("images", []):
             uri = img.get("archived_uri")
@@ -148,8 +157,9 @@ def build_tasks(manifest: dict) -> list[DownloadTask]:
             if not uri or not key:
                 continue
             base = sanitize(img.get("filename") or f"{key}.jpg")
-            count = used.get(base, 0)
-            used[base] = count + 1
+            case_key = base.lower()
+            count = used.get(case_key, 0)
+            used[case_key] = count + 1
             filename = base if count == 0 else disambiguate(base, key)
             tasks.append(
                 DownloadTask(
@@ -336,18 +346,65 @@ def load_credentials() -> tuple[str, str, str, str]:
     return tuple(os.environ[name] for name in REQUIRED_ENV)  # type: ignore[return-value]
 
 
+def find_repo_root() -> Path:
+    """Walk up from this script to the repo root (directory containing .gitignore)."""
+    here = Path(__file__).resolve()
+    for parent in [here.parent, *here.parents]:
+        if (parent / ".gitignore").exists():
+            return parent
+    return here.parent.parent
+
+
+def load_content_root() -> Path:
+    """Read content_root from .config.yaml at the repo root.
+
+    Fails loudly if .config.yaml is missing, malformed, or points at a
+    nonexistent directory. The directory must exist already — we don't
+    create it, because doing so could put 110+ GB on the wrong volume
+    (or one without backup configured).
+    """
+    try:
+        import yaml
+    except ImportError:
+        sys.exit(
+            "pyyaml is required. Install with: "
+            "pip install -r scripts/requirements.txt"
+        )
+    config_path = find_repo_root() / ".config.yaml"
+    if not config_path.exists():
+        sys.exit(
+            f"{config_path} not found.\n"
+            f"Copy .config.example.yaml to .config.yaml and set content_root."
+        )
+    data = yaml.safe_load(config_path.read_text()) or {}
+    root = data.get("content_root")
+    if not root:
+        sys.exit(f"{config_path} missing required key: content_root")
+    path = Path(str(root)).expanduser().resolve()
+    if not path.exists():
+        sys.exit(
+            f"content_root does not exist: {path}\n"
+            f"Create it first (and confirm backup is configured for it)."
+        )
+    if not path.is_dir():
+        sys.exit(f"content_root is not a directory: {path}")
+    return path
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Pass 2: download all originals listed in manifest.json.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
-        "--manifest", default=Path("manifest.json"), type=Path,
-        help="Path to the manifest produced by smugmug_crawl.py (default: manifest.json).",
+        "--manifest", default=Path("scripts/manifest.json"), type=Path,
+        help="Path to the manifest produced by smugmug_crawl.py "
+             "(default: scripts/manifest.json).",
     )
     parser.add_argument(
-        "--photos-root", default=Path("photos"), type=Path,
-        help="Local directory tree to write originals into (default: photos/).",
+        "--content-root", default=None, type=Path,
+        help="Override the content_root from .config.yaml. Useful for "
+             "throwaway test runs (e.g. --content-root /tmp/photos-test).",
     )
     parser.add_argument(
         "--workers", type=int, default=DEFAULT_WORKERS,
@@ -382,6 +439,15 @@ def main() -> None:
         sys.exit(f"Manifest not found: {args.manifest}")
     manifest = json.loads(args.manifest.read_text())
 
+    if args.content_root is not None:
+        content_root = args.content_root.expanduser().resolve()
+        if not content_root.exists():
+            sys.exit(f"--content-root does not exist: {content_root}")
+        if not content_root.is_dir():
+            sys.exit(f"--content-root is not a directory: {content_root}")
+    else:
+        content_root = load_content_root()
+
     tasks = build_tasks(manifest)
     if args.limit:
         tasks = tasks[: args.limit]
@@ -391,8 +457,7 @@ def main() -> None:
         "Loaded %d image tasks (%s expected) from %s",
         len(tasks), human(total_expected_bytes), args.manifest,
     )
-    log.info("Writing to %s with %d workers", args.photos_root, args.workers)
-    args.photos_root.mkdir(parents=True, exist_ok=True)
+    log.info("Writing to %s with %d workers", content_root, args.workers)
 
     results: list[DownloadResult] = []
     counters = {"downloaded": 0, "skipped": 0, "failed": 0, "bytes": 0}

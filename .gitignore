@@ -1,2 +1,10 @@
 specs/.plan
 scripts/manifest.json
+scripts/.venv/
+
+# Local-only config + secrets
+.config.yaml
+.env
+
+# Migration script outputs
+download_report.json
