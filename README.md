@@ -28,13 +28,13 @@ This repo holds **only the tooling** — Astro project, build scripts, configs. 
                ▼
 ┌──────────────────┐  ┌────────────────────────┐
 │ Cloudflare Pages │  │ Cloudflare R2          │
-│ gallery.…        │  │ assets.prenticew.com   │
+│ gallery.…        │  │ assets.…               │
 └──────────────────┘  └────────────────────────┘
 ```
 
 - **Astro** generates the site. Content collections are typed; lightbox + password gate are interactive islands.
 - **sharp** encodes responsive AVIF/WebP/JPEG derivatives + 200×200 thumbnails at widths 480/960/1600/2400.
-- **R2** serves all image bytes (derivatives + originals) from `assets.prenticew.com`.
+- **R2** serves all image bytes (derivatives + originals) from `assets.example.com`.
 
 ---
 
@@ -44,7 +44,7 @@ This repo holds **only the tooling** — Astro project, build scripts, configs. 
 - Python 3.11+ (only for the few utility scripts in `scripts/`)
 - A Cloudflare account with:
   - A Pages project (`photo-portfolio`)
-  - An R2 bucket bound to `assets.prenticew.com`
+  - An R2 bucket bound to `assets.example.com`
   - An API token with `Pages:Edit` + `Account:Read`
   - An R2 access key pair
 
@@ -96,7 +96,7 @@ The content repo is the **canonical source of truth** for galleries. Edit YAML, 
 
 - **Directory path is the URL.** `<content_root>/Travel/Iceland-Ring-Road/` → `/Travel/Iceland-Ring-Road` on the live site.
 - **Image files are auto-discovered.** Anything matching `.jpg|.jpeg|.png` (case-insensitive) in an album directory is included.
-- **Captions + keywords are read from embedded IPTC/XMP** (the metadata Lightroom and Bridge write into the file). YAML overrides only when needed.
+- **Captions + keywords are read from embedded IPTC/XMP** (the metadata written into the file). YAML overrides only when needed.
 - **Plaintext passwords live in the content repo and never leave it** — they're hashed (sha256 + per-album salt) during the build before reaching `dist/` or R2.
 
 ---
@@ -107,7 +107,7 @@ The content repo is the **canonical source of truth** for galleries. Edit YAML, 
 
 ```bash
 mkdir -p "$CONTENT_ROOT/Travel/Joshua-Tree-Spring"
-cp ~/Lightroom/exports/joshua-tree/*.jpg "$CONTENT_ROOT/Travel/Joshua-Tree-Spring/"
+cp ~/exports/joshua-tree/*.jpg "$CONTENT_ROOT/Travel/Joshua-Tree-Spring/"
 ```
 
 The parent folder (`Travel/`) must already exist with its own `meta.yaml`.
@@ -164,7 +164,7 @@ Then add albums inside it.
 Drop the new file in over the old one (same filename). Rebuild.
 
 ```bash
-cp ~/Lightroom/exports/joshua-tree/IMG_4501.jpg "$CONTENT_ROOT/Travel/Joshua-Tree-Spring/"
+cp ~/exports/joshua-tree/IMG_4501.jpg "$CONTENT_ROOT/Travel/Joshua-Tree-Spring/"
 npm run deploy
 ```
 
