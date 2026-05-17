@@ -141,11 +141,15 @@ async function readMetadata(srcPath) {
 async function processImage({ src, imageId }, ctx) {
   const { cache, results, derivDir } = ctx;
   try {
+    log('processImage start ' + imageId);
     const srcStat = await stat(src).catch(() => null);
     if (!srcStat) {
+      log('processImage missing ' + imageId);
       return { status: 'missing', imageId, src };
     }
+    log('processImage stat ok ' + imageId);
     const { meta, exif } = await readMetadata(src);
+    log('processImage meta ' + imageId + ' ' + meta.width + 'x' + meta.height);
     const intrinsicWidth = meta.width ?? 0;
     const intrinsicHeight = meta.height ?? 0;
     const applicableWidths = WIDTHS.filter((w) => w <= intrinsicWidth);
@@ -155,11 +159,14 @@ async function processImage({ src, imageId }, ctx) {
     const outputs = expectedOutputs(derivDir, imageId, applicableWidths);
 
     const hash = await hashFile(src);
+    log('processImage hash ' + imageId);
     const cached = cache[imageId];
     const cacheHit = cached?.hash === hash && (await allExist(outputs));
+    log('processImage cacheHit=' + cacheHit + ' ' + imageId);
 
     if (!cacheHit) {
       await encodeOne({ srcPath: src, imageId, applicableWidths, intrinsicWidth, derivDir });
+      log('processImage encoded ' + imageId);
     }
 
     results[imageId] = {
@@ -192,7 +199,11 @@ async function collectJobs(contentDir) {
   return jobs;
 }
 
+const DEBUG = process.env.DEBUG_POOL === '1';
+const log = (...a) => DEBUG && console.log('[pool]', ...a);
+
 async function runPool(jobs, worker) {
+  log('entering runPool, jobs=' + jobs.length + ' concurrency=' + CONCURRENCY);
   const queue = [...jobs];
   const inflight = new Set();
   let cached = 0;
@@ -203,16 +214,19 @@ async function runPool(jobs, worker) {
 
   async function next() {
     const job = queue.shift();
-    if (!job) return;
+    if (!job) {
+      log('next: queue empty');
+      return;
+    }
+    log('next: starting job ' + job.imageId + ' (queue now ' + queue.length + ')');
     const p = (async () => {
       let res;
       try {
         res = await worker(job);
       } catch (err) {
-        // Should be unreachable because processImage catches its own errors,
-        // but belt-and-suspenders so a rejection never crashes the pool.
         res = { status: 'errored', imageId: job.imageId, src: job.src, error: err?.message || String(err) };
       }
+      log('next: job ' + job.imageId + ' -> ' + res.status);
       if (res.status === 'cached') cached += 1;
       else if (res.status === 'encoded') encoded += 1;
       else if (res.status === 'missing') {
@@ -227,16 +241,22 @@ async function runPool(jobs, worker) {
         process.stdout.write(`\r  processed ${done}/${jobs.length} (encoded ${encoded}, cached ${cached}, missing ${missing}, errored ${errored})`);
       }
     })().finally(() => {
+      log('finally: removing ' + job.imageId + ' from inflight (size=' + inflight.size + ')');
       inflight.delete(p);
     });
     inflight.add(p);
   }
 
+  log('initial fill');
   for (let i = 0; i < Math.min(CONCURRENCY, jobs.length); i++) await next();
+  log('initial fill done, inflight=' + inflight.size);
   while (inflight.size > 0) {
+    log('awaiting race, inflight=' + inflight.size + ', queue=' + queue.length);
     await Promise.race(inflight);
+    log('race resolved, inflight=' + inflight.size);
     await next();
   }
+  log('loop exit');
   process.stdout.write('\n');
   return { cached, encoded, missing, errored, errorSamples };
 }
