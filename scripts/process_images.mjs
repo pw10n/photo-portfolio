@@ -12,7 +12,6 @@ import { createReadStream } from 'node:fs';
 import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { cpus } from 'node:os';
 import { resolve } from 'node:path';
-import { pipeline } from 'node:stream/promises';
 import sharp from 'sharp';
 import exifr from 'exifr';
 import { loadConfig } from './_config.mjs';
@@ -37,12 +36,9 @@ async function readJson(path, fallback) {
 
 async function hashFile(path) {
   const h = createHash('sha256');
-  await pipeline(createReadStream(path), async function* (source) {
-    for await (const chunk of source) {
-      h.update(chunk);
-      yield chunk;
-    }
-  });
+  for await (const chunk of createReadStream(path)) {
+    h.update(chunk);
+  }
   return h.digest('hex');
 }
 
