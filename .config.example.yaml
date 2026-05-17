@@ -1,0 +1,11 @@
+# Copy to .config.yaml and edit. .config.yaml is gitignored.
+#
+# content_root is the absolute path to the local content repo where
+# photo originals and per-album meta.yaml files live. It must already
+# exist (the scripts do not create it — keeps you in control of where
+# 110+ GB of originals land, and ensures your backup is configured for
+# the right directory).
+#
+# Suggested layout: a sibling directory to this repo.
+
+content_root: /absolute/path/to/photo-content

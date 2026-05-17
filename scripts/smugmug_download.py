@@ -241,9 +241,9 @@ def already_good(target: Path, task: DownloadTask) -> bool:
 def download_one(
     task: DownloadTask,
     session: requests.Session,
-    photos_root: Path,
+    content_root: Path,
 ) -> DownloadResult:
-    target = photos_root.joinpath(*task.album_segments, task.filename)
+    target = content_root.joinpath(*task.album_segments, task.filename)
 
     if already_good(target, task):
         return DownloadResult(task.image_key, target, "skipped")
@@ -478,7 +478,7 @@ def main() -> None:
 
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
         futures = {
-            pool.submit(download_one, task, session, args.photos_root): task
+            pool.submit(download_one, task, session, content_root): task
             for task in tasks
         }
         for i, future in enumerate(as_completed(futures), 1):
@@ -504,7 +504,7 @@ def main() -> None:
     report = {
         "completed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "manifest": str(args.manifest),
-        "photos_root": str(args.photos_root),
+        "content_root": str(content_root),
         "workers": args.workers,
         "elapsed_seconds": round(elapsed, 2),
         "total_tasks": len(tasks),
