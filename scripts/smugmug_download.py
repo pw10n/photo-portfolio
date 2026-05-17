@@ -223,17 +223,19 @@ def human(n: float) -> str:
 # Per-file download
 # ---------------------------------------------------------------------------
 
-def already_good(target: Path, task: DownloadTask) -> bool:
+def already_good(target: Path, task: DownloadTask, skip_md5: bool = False) -> bool:
     """True if target exists, has the expected size, and hashes to ArchivedMD5.
 
     Size is checked first to avoid hashing files that are obviously stale.
-    If the manifest lacks an MD5, fall back to size-only equality.
+    If the manifest lacks an MD5, or skip_md5 is set, fall back to size-only
+    equality. skip_md5 is used in --rescue mode for keys whose SmugMug-side
+    ArchivedMD5 metadata doesn't match the bytes actually served.
     """
     if not target.exists():
         return False
     if task.archived_size is not None and target.stat().st_size != task.archived_size:
         return False
-    if not task.archived_md5:
+    if skip_md5 or not task.archived_md5:
         return True
     return md5_of_file(target).lower() == task.archived_md5.lower()
 
@@ -242,10 +244,11 @@ def download_one(
     task: DownloadTask,
     session: requests.Session,
     content_root: Path,
+    skip_md5: bool = False,
 ) -> DownloadResult:
     target = content_root.joinpath(*task.album_segments, task.filename)
 
-    if already_good(target, task):
+    if already_good(target, task, skip_md5=skip_md5):
         return DownloadResult(task.image_key, target, "skipped")
 
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -286,7 +289,7 @@ def download_one(
                         bytes_written += len(chunk)
 
             # Verify integrity before publishing the file.
-            if task.archived_md5:
+            if task.archived_md5 and not skip_md5:
                 got = hasher.hexdigest().lower()
                 if got != task.archived_md5.lower():
                     tmp.unlink(missing_ok=True)
@@ -419,6 +422,13 @@ def parse_args() -> argparse.Namespace:
         help="Path to write the JSON report at end of run.",
     )
     parser.add_argument(
+        "--rescue", nargs="+", metavar="KEY", default=None,
+        help="Rescue mode for specific image keys whose SmugMug-side "
+             "ArchivedMD5 doesn't match the bytes served at ArchivedUri. "
+             "Filters tasks to the listed keys AND bypasses MD5 verification "
+             "for them (size-only check still applies). Use sparingly.",
+    )
+    parser.add_argument(
         "--verbose", "-v", action="store_true",
         help="Enable debug-level logging (per-file).",
     )
@@ -449,6 +459,18 @@ def main() -> None:
         content_root = load_content_root()
 
     tasks = build_tasks(manifest)
+    skip_md5 = False
+    if args.rescue:
+        wanted = set(args.rescue)
+        tasks = [t for t in tasks if t.image_key in wanted]
+        missing = wanted - {t.image_key for t in tasks}
+        if missing:
+            sys.exit(f"--rescue keys not found in manifest: {sorted(missing)}")
+        skip_md5 = True
+        log.warning(
+            "RESCUE MODE: %d keys; MD5 verification disabled (size-only).",
+            len(tasks),
+        )
     if args.limit:
         tasks = tasks[: args.limit]
 
@@ -478,7 +500,7 @@ def main() -> None:
 
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
         futures = {
-            pool.submit(download_one, task, session, content_root): task
+            pool.submit(download_one, task, session, content_root, skip_md5): task
             for task in tasks
         }
         for i, future in enumerate(as_completed(futures), 1):
