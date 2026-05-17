@@ -4,9 +4,8 @@
 // Halts at the first non-zero exit.
 
 import { spawn } from 'node:child_process';
-import { readFile, stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import yaml from 'js-yaml';
+import { loadConfig } from './_config.mjs';
 
 const REPO_ROOT = resolve(import.meta.dirname, '..');
 
@@ -32,30 +31,16 @@ async function step(label, cmd, args) {
 
 async function verifyConfig() {
   console.log('▶ verify config');
-  const cfgPath = resolve(REPO_ROOT, '.config.yaml');
-  let text;
   try {
-    text = await readFile(cfgPath, 'utf8');
+    const { contentRoot, contentDir, buildDir } = await loadConfig({ ensureBuildDir: true });
+    console.log(`✓ verify config`);
+    console.log(`  content_root: ${contentRoot}`);
+    console.log(`  content_dir:  ${contentDir}`);
+    console.log(`  build_dir:    ${buildDir}`);
   } catch (err) {
-    if (err.code === 'ENOENT') {
-      console.error(`✗ .config.yaml not found at ${cfgPath}`);
-      console.error('  Copy .config.example.yaml to .config.yaml and set content_root.');
-      process.exit(1);
-    }
-    throw err;
-  }
-  const cfg = yaml.load(text) ?? {};
-  if (!cfg.content_root || typeof cfg.content_root !== 'string') {
-    console.error('✗ .config.yaml is missing the required `content_root` key.');
+    console.error(`✗ ${err.message}`);
     process.exit(1);
   }
-  const cr = resolve(cfg.content_root);
-  const st = await stat(cr).catch(() => null);
-  if (!st?.isDirectory()) {
-    console.error(`✗ content_root does not exist or is not a directory: ${cr}`);
-    process.exit(1);
-  }
-  console.log(`✓ verify config (content_root=${cr})`);
 }
 
 async function main() {

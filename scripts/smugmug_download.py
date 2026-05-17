@@ -249,7 +249,9 @@ def download_one(
     content_root: Path,
     skip_integrity: bool = False,
 ) -> DownloadResult:
-    target = content_root.joinpath(*task.album_segments, task.filename)
+    # Photos live under <content_root>/content/<url_path>/<filename>; the
+    # sibling build/ directory is reserved for derivatives + image metadata.
+    target = content_root.joinpath("content", *task.album_segments, task.filename)
 
     if already_good(target, task, skip_integrity=skip_integrity):
         return DownloadResult(task.image_key, target, "skipped")

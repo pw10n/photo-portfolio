@@ -15,6 +15,7 @@
 import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import yaml from 'js-yaml';
+import { loadConfig } from './_config.mjs';
 
 const REPO_ROOT = resolve(import.meta.dirname, '..');
 
@@ -188,18 +189,6 @@ function quoteKey(name) {
 // File system helpers
 // ────────────────────────────────────────────────────────────────────────────
 
-async function loadConfig() {
-  const text = await readFile(resolve(REPO_ROOT, '.config.yaml'), 'utf8');
-  const cfg = yaml.load(text);
-  if (!cfg?.content_root) throw new Error('.config.yaml missing content_root');
-  const cr = resolve(cfg.content_root);
-  const st = await stat(cr).catch(() => null);
-  if (!st?.isDirectory()) {
-    throw new Error(`content_root does not exist or is not a directory: ${cr}`);
-  }
-  return { contentRoot: cr };
-}
-
 async function exists(p) {
   try {
     await stat(p);
@@ -222,7 +211,11 @@ async function writeAtomic(path, contents, { dryRun }) {
 
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
-  const { contentRoot } = await loadConfig();
+  // requireContentDir=false: a fresh migration is the moment when content/
+  // doesn't exist yet — we'll create it as we write meta.yaml files.
+  const { contentRoot, contentDir } = await loadConfig({ requireContentDir: false });
+  if (!opts.dryRun) await mkdir(contentDir, { recursive: true });
+
   const manifestText = await readFile(opts.manifest, 'utf8');
   const manifest = JSON.parse(manifestText);
 
@@ -232,6 +225,7 @@ async function main() {
 
   console.log(`manifest_to_yaml`);
   console.log(`  content_root:  ${contentRoot}`);
+  console.log(`  content_dir:   ${contentDir}`);
   console.log(`  manifest:      ${opts.manifest}`);
   console.log(`  folders:       ${folders.length}`);
   console.log(`  albums:        ${albums.length}`);
@@ -254,7 +248,7 @@ async function main() {
     if (!f.url_path) continue;
     const segments = urlPathSegments(f.url_path);
     if (segments.length === 0) continue;
-    const dir = resolve(contentRoot, ...segments);
+    const dir = resolve(contentDir, ...segments);
     const metaPath = resolve(dir, 'meta.yaml');
     if (await exists(metaPath) && !opts.force) {
       foldersSkipped += 1;
@@ -271,7 +265,7 @@ async function main() {
     if (!a.url_path) continue;
     const segments = urlPathSegments(a.url_path);
     if (segments.length === 0) continue;
-    const dir = resolve(contentRoot, ...segments);
+    const dir = resolve(contentDir, ...segments);
     const metaPath = resolve(dir, 'meta.yaml');
 
     const onDiskByKey = {};
@@ -309,7 +303,7 @@ async function main() {
     }
   }
 
-  const legacyPath = resolve(contentRoot, '.legacy-keys.json');
+  const legacyPath = resolve(contentDir, '.legacy-keys.json');
   await writeAtomic(legacyPath, JSON.stringify(legacyKeys, null, 2), opts);
 
   console.log(`Folders:  wrote ${foldersWritten}, skipped ${foldersSkipped} (existing meta.yaml)`);

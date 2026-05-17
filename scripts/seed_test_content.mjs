@@ -6,7 +6,12 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import sharp from 'sharp';
 
-const ROOT = resolve(import.meta.dirname, '..', 'test-content');
+// Writes into <test-content-root>/content/ to match the layout convention:
+//   <content_root>/
+//   ├── content/   ← seeded here
+//   └── build/     ← created by process_images on first build
+const PORTFOLIO_ROOT = resolve(import.meta.dirname, '..', 'test-content');
+const ROOT = resolve(PORTFOLIO_ROOT, 'content');
 
 const FIXTURES = [
   {
@@ -156,6 +161,8 @@ async function main() {
   }
 
   console.log('\nDone. Set content_root in .config.yaml to:');
+  console.log(`  ${PORTFOLIO_ROOT}`);
+  console.log('Photos were seeded into the content/ subdirectory:');
   console.log(`  ${ROOT}`);
 }
 
