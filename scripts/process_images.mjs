@@ -140,36 +140,40 @@ async function readMetadata(srcPath) {
 
 async function processImage({ src, imageId }, ctx) {
   const { cache, results, derivDir } = ctx;
-  const srcStat = await stat(src).catch(() => null);
-  if (!srcStat) {
-    return { status: 'missing', imageId, src };
-  }
-  const { meta, exif } = await readMetadata(src);
-  const intrinsicWidth = meta.width ?? 0;
-  const intrinsicHeight = meta.height ?? 0;
-  const applicableWidths = WIDTHS.filter((w) => w <= intrinsicWidth);
-  if (applicableWidths.length === 0 && intrinsicWidth > 0) {
-    applicableWidths.push(intrinsicWidth);
-  }
-  const outputs = expectedOutputs(derivDir, imageId, applicableWidths);
+  try {
+    const srcStat = await stat(src).catch(() => null);
+    if (!srcStat) {
+      return { status: 'missing', imageId, src };
+    }
+    const { meta, exif } = await readMetadata(src);
+    const intrinsicWidth = meta.width ?? 0;
+    const intrinsicHeight = meta.height ?? 0;
+    const applicableWidths = WIDTHS.filter((w) => w <= intrinsicWidth);
+    if (applicableWidths.length === 0 && intrinsicWidth > 0) {
+      applicableWidths.push(intrinsicWidth);
+    }
+    const outputs = expectedOutputs(derivDir, imageId, applicableWidths);
 
-  const hash = await hashFile(src);
-  const cached = cache[imageId];
-  const cacheHit = cached?.hash === hash && (await allExist(outputs));
+    const hash = await hashFile(src);
+    const cached = cache[imageId];
+    const cacheHit = cached?.hash === hash && (await allExist(outputs));
 
-  if (!cacheHit) {
-    await encodeOne({ srcPath: src, imageId, applicableWidths, intrinsicWidth, derivDir });
+    if (!cacheHit) {
+      await encodeOne({ srcPath: src, imageId, applicableWidths, intrinsicWidth, derivDir });
+    }
+
+    results[imageId] = {
+      width: intrinsicWidth,
+      height: intrinsicHeight,
+      formats: FORMATS,
+      widths: applicableWidths,
+      exif: projectExif(exif),
+    };
+    cache[imageId] = { hash };
+    return { status: cacheHit ? 'cached' : 'encoded', imageId };
+  } catch (err) {
+    return { status: 'errored', imageId, src, error: err?.message || String(err) };
   }
-
-  results[imageId] = {
-    width: intrinsicWidth,
-    height: intrinsicHeight,
-    formats: FORMATS,
-    widths: applicableWidths,
-    exif: projectExif(exif),
-  };
-  cache[imageId] = { hash };
-  return { status: cacheHit ? 'cached' : 'encoded', imageId };
 }
 
 async function collectJobs(contentDir) {
@@ -194,22 +198,35 @@ async function runPool(jobs, worker) {
   let cached = 0;
   let encoded = 0;
   let missing = 0;
+  let errored = 0;
+  const errorSamples = [];
 
   async function next() {
     const job = queue.shift();
     if (!job) return;
-    const p = worker(job).then((res) => {
+    const p = (async () => {
+      let res;
+      try {
+        res = await worker(job);
+      } catch (err) {
+        // Should be unreachable because processImage catches its own errors,
+        // but belt-and-suspenders so a rejection never crashes the pool.
+        res = { status: 'errored', imageId: job.imageId, src: job.src, error: err?.message || String(err) };
+      }
       if (res.status === 'cached') cached += 1;
       else if (res.status === 'encoded') encoded += 1;
       else if (res.status === 'missing') {
         missing += 1;
-        console.warn(`  missing source: ${res.src}`);
+        if (missing <= 5) console.warn(`  missing source: ${res.src}`);
+      } else if (res.status === 'errored') {
+        errored += 1;
+        if (errorSamples.length < 5) errorSamples.push(`${res.imageId} (${res.src}): ${res.error}`);
       }
-      const done = cached + encoded + missing;
+      const done = cached + encoded + missing + errored;
       if (done % 25 === 0 || done === jobs.length) {
-        process.stdout.write(`\r  processed ${done}/${jobs.length} (encoded ${encoded}, cached ${cached}, missing ${missing})`);
+        process.stdout.write(`\r  processed ${done}/${jobs.length} (encoded ${encoded}, cached ${cached}, missing ${missing}, errored ${errored})`);
       }
-    }).finally(() => {
+    })().finally(() => {
       inflight.delete(p);
     });
     inflight.add(p);
@@ -221,7 +238,7 @@ async function runPool(jobs, worker) {
     await next();
   }
   process.stdout.write('\n');
-  return { cached, encoded, missing };
+  return { cached, encoded, missing, errored, errorSamples };
 }
 
 async function main() {
@@ -248,8 +265,17 @@ async function main() {
   await writeFile(metaPath, JSON.stringify(results, null, 2));
   await writeFile(cachePath, JSON.stringify(cache, null, 2));
 
-  console.log(`  encoded ${summary.encoded}, cached ${summary.cached}, missing ${summary.missing}`);
+  console.log(`  encoded ${summary.encoded}, cached ${summary.cached}, missing ${summary.missing}, errored ${summary.errored}`);
+  console.log(`  results entries: ${Object.keys(results).length}`);
   console.log(`  wrote ${metaPath}`);
+  if (summary.errored > 0) {
+    console.log(`  first ${summary.errorSamples.length} errors:`);
+    for (const e of summary.errorSamples) console.log(`    ${e}`);
+    process.exit(1);
+  }
+  if (summary.missing > 0) {
+    console.log(`  (use a fresh smugmug_download run to fill in missing sources)`);
+  }
 }
 
 main().catch((err) => {
