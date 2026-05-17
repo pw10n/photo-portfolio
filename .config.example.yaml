@@ -1,11 +1,17 @@
 # Copy to .config.yaml and edit. .config.yaml is gitignored.
 #
-# content_root is the absolute path to the local content repo where
-# photo originals and per-album meta.yaml files live. It must already
-# exist (the scripts do not create it — keeps you in control of where
-# 110+ GB of originals land, and ensures your backup is configured for
-# the right directory).
+# content_root is the absolute path to the portfolio's parent directory.
+# The scripts assume this layout under it:
 #
-# Suggested layout: a sibling directory to this repo.
+#   <content_root>/
+#   ├── content/   ← photos + per-album meta.yaml + .legacy-keys.json
+#   └── build/     ← derivatives + image-meta.json + caches (auto-created)
+#
+# content/ must exist before `npm run build` runs; build/ is created
+# automatically the first time the pipeline runs.
+#
+# Suggested layout: a sibling directory to this repo, or a path on a
+# bigger filesystem (NFS, external drive) since originals + derivatives
+# can total 50+ GB at scale.
 
-content_root: /absolute/path/to/photo-content
+content_root: /absolute/path/to/portfolio

@@ -6,13 +6,12 @@ import { readdir, readFile, stat } from 'node:fs/promises';
 import { resolve, relative } from 'node:path';
 import yaml from 'js-yaml';
 import sharp from 'sharp';
+import { loadConfig } from './_config.mjs';
 
 const REPO_ROOT = resolve(import.meta.dirname, '..');
 const DIST = resolve(REPO_ROOT, 'dist');
-const BUILD = resolve(REPO_ROOT, 'build');
 const ALBUMS_DIR = resolve(REPO_ROOT, 'src', 'content', 'albums');
 const FOLDERS_DIR = resolve(REPO_ROOT, 'src', 'content', 'folders');
-const DERIV_DIR = resolve(BUILD, 'derivatives');
 
 const IMAGE_ID_RE = /^[a-z2-7]{11}$/;
 const ALBUM_ID_RE = /^alb_[A-Za-z0-9]+$/;
@@ -44,12 +43,6 @@ async function pathExists(p) {
   } catch {
     return false;
   }
-}
-
-async function loadConfig() {
-  const text = await readFile(resolve(REPO_ROOT, '.config.yaml'), 'utf8');
-  const cfg = yaml.load(text);
-  return { contentRoot: resolve(cfg.content_root) };
 }
 
 async function loadAlbums() {
@@ -103,7 +96,7 @@ async function checkFolderCoverage(folders) {
   return { name: 'folder HTML coverage', failures };
 }
 
-async function checkAssetCoverage(albums, imageMeta) {
+async function checkAssetCoverage(albums, imageMeta, derivDir) {
   const failures = [];
   for (const a of albums) {
     for (const img of a.images) {
@@ -120,7 +113,7 @@ async function checkAssetCoverage(albums, imageMeta) {
       const targetWidth = widths.includes(960) ? 960 : Math.max(...widths);
       const formats = meta.formats ?? [];
       const present = await Promise.all(
-        formats.map((fmt) => pathExists(resolve(DERIV_DIR, img.image_id, `${targetWidth}.${fmt}`))),
+        formats.map((fmt) => pathExists(resolve(derivDir, img.image_id, `${targetWidth}.${fmt}`))),
       );
       if (!present.some(Boolean)) {
         failures.push(`image ${img.image_id} has no derivative at width ${targetWidth} in any format`);
@@ -147,9 +140,9 @@ async function checkSitemapPurity() {
   return { name: 'sitemap & feed purity', failures };
 }
 
-async function collectPlaintextPasswords(contentRoot) {
+async function collectPlaintextPasswords(contentDir) {
   const set = new Set();
-  for await (const p of walk(contentRoot)) {
+  for await (const p of walk(contentDir)) {
     if (!p.endsWith('meta.yaml')) continue;
     try {
       const data = yaml.load(await readFile(p, 'utf8')) ?? {};
@@ -212,7 +205,7 @@ async function checkRedirects() {
   return { name: '_redirects present', failures };
 }
 
-async function checkNoUpscale(imageMeta) {
+async function checkNoUpscale(imageMeta, derivDir) {
   const failures = [];
   const ids = Object.keys(imageMeta);
   if (ids.length === 0) return { name: 'no upscaled derivatives (sample)', failures };
@@ -227,7 +220,7 @@ async function checkNoUpscale(imageMeta) {
     if (!meta?.widths?.length) continue;
     const w = meta.widths[Math.floor(Math.random() * meta.widths.length)];
     const fmt = (meta.formats ?? ['jpg'])[0];
-    const path = resolve(DERIV_DIR, id, `${w}.${fmt}`);
+    const path = resolve(derivDir, id, `${w}.${fmt}`);
     if (await pathExists(path)) sample.push({ id, w, path, intrinsic: meta.width });
   }
 
@@ -302,23 +295,24 @@ async function checkNamespaceNonOverlap(albums, legacyKeys) {
 // ────────────────────────────────────────────────────────────────────────────
 
 async function main() {
-  const { contentRoot } = await loadConfig();
+  const { contentDir, buildDir } = await loadConfig();
+  const derivDir = resolve(buildDir, 'derivatives');
   const [albums, folders, imageMeta, legacyKeys, plaintexts] = await Promise.all([
     loadAlbums(),
     loadFolders(),
-    readJson(resolve(BUILD, 'image-meta.json'), {}),
-    readJson(resolve(BUILD, 'legacy-keys.json'), {}),
-    collectPlaintextPasswords(contentRoot),
+    readJson(resolve(buildDir, 'image-meta.json'), {}),
+    readJson(resolve(buildDir, 'legacy-keys.json'), {}),
+    collectPlaintextPasswords(contentDir),
   ]);
 
   const results = await Promise.all([
     checkAlbumCoverage(albums),
     checkFolderCoverage(folders),
-    checkAssetCoverage(albums, imageMeta),
+    checkAssetCoverage(albums, imageMeta, derivDir),
     checkSitemapPurity(),
     checkPasswordsAndLeaks(albums, plaintexts),
     checkRedirects(),
-    checkNoUpscale(imageMeta),
+    checkNoUpscale(imageMeta, derivDir),
     checkLegacyKeys(albums, legacyKeys),
     checkAlbumIds(albums),
     checkNamespaceNonOverlap(albums, legacyKeys),

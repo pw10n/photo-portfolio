@@ -15,13 +15,9 @@ import { resolve } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import sharp from 'sharp';
 import exifr from 'exifr';
-import yaml from 'js-yaml';
+import { loadConfig } from './_config.mjs';
 
 const REPO_ROOT = resolve(import.meta.dirname, '..');
-const BUILD_DIR = resolve(REPO_ROOT, 'build');
-const DERIV_DIR = resolve(BUILD_DIR, 'derivatives');
-const META_PATH = resolve(BUILD_DIR, 'image-meta.json');
-const CACHE_PATH = resolve(BUILD_DIR, 'derivative-cache.json');
 const ALBUMS_DIR = resolve(REPO_ROOT, 'src', 'content', 'albums');
 
 const WIDTHS = [480, 960, 1600, 2400];
@@ -29,14 +25,6 @@ const FORMATS = ['avif', 'webp', 'jpg'];
 const QUALITY = { avif: 50, webp: 75, jpg: 82 };
 const THUMB_SIZE = 200;
 const CONCURRENCY = Math.max(1, cpus().length);
-
-async function loadConfig() {
-  const cfgPath = resolve(REPO_ROOT, '.config.yaml');
-  const text = await readFile(cfgPath, 'utf8');
-  const cfg = yaml.load(text);
-  if (!cfg?.content_root) throw new Error('.config.yaml missing content_root');
-  return { contentRoot: resolve(cfg.content_root) };
-}
 
 async function readJson(path, fallback) {
   try {
@@ -58,15 +46,15 @@ async function hashFile(path) {
   return h.digest('hex');
 }
 
-function expectedOutputs(imageId, applicableWidths) {
+function expectedOutputs(derivDir, imageId, applicableWidths) {
   const paths = [];
   for (const w of applicableWidths) {
     for (const fmt of FORMATS) {
-      paths.push(resolve(DERIV_DIR, imageId, `${w}.${fmt}`));
+      paths.push(resolve(derivDir, imageId, `${w}.${fmt}`));
     }
   }
   for (const fmt of FORMATS) {
-    paths.push(resolve(DERIV_DIR, imageId, `thumb.${fmt}`));
+    paths.push(resolve(derivDir, imageId, `thumb.${fmt}`));
   }
   return paths;
 }
@@ -113,8 +101,8 @@ async function ensureDir(p) {
   await mkdir(p, { recursive: true });
 }
 
-async function encodeOne({ srcPath, imageId, applicableWidths, intrinsicWidth }) {
-  const outDir = resolve(DERIV_DIR, imageId);
+async function encodeOne({ srcPath, imageId, applicableWidths, intrinsicWidth, derivDir }) {
+  const outDir = resolve(derivDir, imageId);
   await ensureDir(outDir);
 
   const sourceBuf = await readFile(srcPath);
@@ -150,7 +138,8 @@ async function readMetadata(srcPath) {
   return { meta, exif };
 }
 
-async function processImage({ src, imageId }, cache, results) {
+async function processImage({ src, imageId }, ctx) {
+  const { cache, results, derivDir } = ctx;
   const srcStat = await stat(src).catch(() => null);
   if (!srcStat) {
     return { status: 'missing', imageId, src };
@@ -162,14 +151,14 @@ async function processImage({ src, imageId }, cache, results) {
   if (applicableWidths.length === 0 && intrinsicWidth > 0) {
     applicableWidths.push(intrinsicWidth);
   }
-  const outputs = expectedOutputs(imageId, applicableWidths);
+  const outputs = expectedOutputs(derivDir, imageId, applicableWidths);
 
   const hash = await hashFile(src);
   const cached = cache[imageId];
   const cacheHit = cached?.hash === hash && (await allExist(outputs));
 
   if (!cacheHit) {
-    await encodeOne({ srcPath: src, imageId, applicableWidths, intrinsicWidth });
+    await encodeOne({ srcPath: src, imageId, applicableWidths, intrinsicWidth, derivDir });
   }
 
   results[imageId] = {
@@ -183,7 +172,7 @@ async function processImage({ src, imageId }, cache, results) {
   return { status: cacheHit ? 'cached' : 'encoded', imageId };
 }
 
-async function collectJobs(contentRoot) {
+async function collectJobs(contentDir) {
   const files = await readdir(ALBUMS_DIR).catch(() => []);
   const jobs = [];
   for (const f of files) {
@@ -191,7 +180,7 @@ async function collectJobs(contentRoot) {
     const album = JSON.parse(await readFile(resolve(ALBUMS_DIR, f), 'utf8'));
     for (const img of album.images) {
       jobs.push({
-        src: resolve(contentRoot, album.url_path.replace(/^\//, ''), img.filename),
+        src: resolve(contentDir, album.url_path.replace(/^\//, ''), img.filename),
         imageId: img.image_id,
       });
     }
@@ -236,27 +225,31 @@ async function runPool(jobs, worker) {
 }
 
 async function main() {
-  const { contentRoot } = await loadConfig();
-  await ensureDir(DERIV_DIR);
+  const { contentDir, buildDir } = await loadConfig({ ensureBuildDir: true });
+  const derivDir = resolve(buildDir, 'derivatives');
+  const metaPath = resolve(buildDir, 'image-meta.json');
+  const cachePath = resolve(buildDir, 'derivative-cache.json');
+  await ensureDir(derivDir);
 
-  const jobs = await collectJobs(contentRoot);
+  const jobs = await collectJobs(contentDir);
   if (jobs.length === 0) {
     console.log('process_images: no images to process (src/content/albums/*.json is empty or missing).');
-    await writeFile(META_PATH, '{}');
+    await writeFile(metaPath, '{}');
     return;
   }
 
   console.log(`process_images: ${jobs.length} images, concurrency=${CONCURRENCY}`);
-  const cache = await readJson(CACHE_PATH, {});
+  console.log(`  build_dir: ${buildDir}`);
+  const cache = await readJson(cachePath, {});
   const results = {};
 
-  const summary = await runPool(jobs, (job) => processImage(job, cache, results));
+  const summary = await runPool(jobs, (job) => processImage(job, { cache, results, derivDir }));
 
-  await writeFile(META_PATH, JSON.stringify(results, null, 2));
-  await writeFile(CACHE_PATH, JSON.stringify(cache, null, 2));
+  await writeFile(metaPath, JSON.stringify(results, null, 2));
+  await writeFile(cachePath, JSON.stringify(cache, null, 2));
 
   console.log(`  encoded ${summary.encoded}, cached ${summary.cached}, missing ${summary.missing}`);
-  console.log(`  wrote ${META_PATH}`);
+  console.log(`  wrote ${metaPath}`);
 }
 
 main().catch((err) => {

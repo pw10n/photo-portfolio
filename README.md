@@ -9,19 +9,24 @@ This repo holds **only the tooling** — Astro project, build scripts, configs. 
 ## Overview
 
 ```
-┌─────────────────────────────┐
-│ Content repo (local-only)   │
-│   <folder>/<album>/         │
-│     meta.yaml               │
-│     *.jpg                   │
-└──────────────┬──────────────┘
-               │  yaml_to_content.mjs
-               │  process_images.mjs
-               ▼
+┌──────────────────────────────────────┐
+│ content_root (local / NFS / etc.)    │
+│   ├── content/                       │
+│   │     <folder>/<album>/            │
+│   │       meta.yaml                  │
+│   │       *.jpg                      │
+│   └── build/         (auto-created)  │
+│         derivatives/                 │
+│         image-meta.json              │
+│         derivative-cache.json        │
+│         legacy-keys.json             │
+└──────────────────┬───────────────────┘
+                   │  yaml_to_content.mjs
+                   │  process_images.mjs
+                   ▼
 ┌─────────────────────────────┐
 │ This repo (photo-portfolio) │
 │   src/content/   (generated)│
-│   build/         (cached)   │
 │   dist/          (built)    │
 └──────────────┬──────────────┘
                │  publish.mjs
@@ -34,7 +39,7 @@ This repo holds **only the tooling** — Astro project, build scripts, configs. 
 
 - **Astro** generates the site. Content collections are typed; lightbox + password gate are interactive islands.
 - **sharp** encodes responsive AVIF/WebP/JPEG derivatives + 200×200 thumbnails at widths 480/960/1600/2400.
-- **R2** serves all image bytes (derivatives + originals) from `assets.prenticew.com` in production. For local dev, derivatives are served by the Astro dev server via a `public/derivatives → ../build/derivatives` symlink.
+- **R2** serves all image bytes (derivatives + originals) from `assets.prenticew.com` in production. For local dev, derivatives are served by the Astro dev server via a `public/derivatives → <content_root>/build/derivatives` symlink.
 
 ---
 
@@ -76,7 +81,9 @@ echo "content_root: $(pwd)/test-content" > .config.yaml
 
 # 3. Local-mode assets: relative URLs + symlink derivatives into public/
 echo "PUBLIC_ASSETS_BASE_URL=/" > .env
-ln -sfn ../build/derivatives public/derivatives
+ln -sfn ../test-content/build/derivatives public/derivatives
+# (For a non-test content_root, use the absolute path:
+#   ln -sfn /mnt/nfs-share/Portfolio/build/derivatives public/derivatives)
 
 # 4. Build the full chain (yaml → JSON → derivatives → astro build → verify)
 npm run build
@@ -95,22 +102,28 @@ To switch to your real content repo later, just change `content_root` in `.confi
 
 ## Content repo layout
 
-The content repo is the **canonical source of truth** for galleries. Edit YAML, drop in photos, rebuild.
+`content_root` is the **portfolio parent directory**, which has two subdirectories: `content/` (canonical source of truth — edit YAML, drop in photos, rebuild) and `build/` (auto-created, holds derivatives + caches; safe to delete to force a full re-encode).
 
 ```
 <content_root>/
-├── .legacy-keys.json              # auto-maintained; preserves legacy-site deep links
-├── Travel/
-│   ├── meta.yaml                  # folder
-│   └── Iceland-Ring-Road/
-│       ├── meta.yaml              # album
-│       ├── 306B2755.jpg           # original (any of .jpg/.jpeg/.png)
-│       └── 306B2756.jpg
-└── Weddings/
-    ├── meta.yaml
-    └── Sample-Wedding/
-        ├── meta.yaml
-        └── ...
+├── content/
+│   ├── .legacy-keys.json          # auto-maintained; preserves legacy-site deep links
+│   ├── Travel/
+│   │   ├── meta.yaml              # folder
+│   │   └── Iceland-Ring-Road/
+│   │       ├── meta.yaml          # album
+│   │       ├── 306B2755.jpg       # original (any of .jpg/.jpeg/.png)
+│   │       └── 306B2756.jpg
+│   └── Weddings/
+│       ├── meta.yaml
+│       └── Sample-Wedding/
+│           ├── meta.yaml
+│           └── ...
+└── build/                         # auto-created by process_images.mjs
+    ├── derivatives/<image_id>/{480,960,1600,2400}.{avif,webp,jpg}, thumb.{...}
+    ├── image-meta.json            # dims + projected EXIF per image_id
+    ├── derivative-cache.json      # image_id → source sha256 (skip-unchanged)
+    └── legacy-keys.json           # mirrored from content/.legacy-keys.json
 ```
 
 - **Directory path is the URL.** `<content_root>/Travel/Iceland-Ring-Road/` → `/Travel/Iceland-Ring-Road` on the live site.
@@ -125,16 +138,16 @@ The content repo is the **canonical source of truth** for galleries. Edit YAML, 
 ### 1. Create the directory and drop photos in
 
 ```bash
-mkdir -p "$CONTENT_ROOT/Travel/Joshua-Tree-Spring"
-cp ~/exports/joshua-tree/*.jpg "$CONTENT_ROOT/Travel/Joshua-Tree-Spring/"
+mkdir -p "$CONTENT_ROOT/content/Travel/Joshua-Tree-Spring"
+cp ~/exports/joshua-tree/*.jpg "$CONTENT_ROOT/content/Travel/Joshua-Tree-Spring/"
 ```
 
-The parent folder (`Travel/`) must already exist with its own `meta.yaml`.
+The parent folder (`content/Travel/`) must already exist with its own `meta.yaml`.
 
 ### 2. Write a minimal `meta.yaml`
 
 ```yaml
-# <content_root>/Travel/Joshua-Tree-Spring/meta.yaml
+# <content_root>/content/Travel/Joshua-Tree-Spring/meta.yaml
 name: "Joshua Tree Spring"
 date: 2026-06-15
 ```
@@ -170,8 +183,8 @@ This is the album's permanent identifier — it survives directory renames and k
 ### Add a new folder
 
 ```bash
-mkdir -p "$CONTENT_ROOT/Events"
-cat > "$CONTENT_ROOT/Events/meta.yaml" <<EOF
+mkdir -p "$CONTENT_ROOT/content/Events"
+cat > "$CONTENT_ROOT/content/Events/meta.yaml" <<EOF
 name: "Events"
 EOF
 ```
@@ -183,7 +196,7 @@ Then add albums inside it.
 Drop the new file in over the old one (same filename). Rebuild.
 
 ```bash
-cp ~/exports/joshua-tree/IMG_4501.jpg "$CONTENT_ROOT/Travel/Joshua-Tree-Spring/"
+cp ~/exports/joshua-tree/IMG_4501.jpg "$CONTENT_ROOT/content/Travel/Joshua-Tree-Spring/"
 npm run build      # `npm run deploy` will replace this once publish.mjs lands
 ```
 
@@ -192,7 +205,7 @@ The `image_id` is derived from `album.id + filename`, so it doesn't change — s
 ### Rename an album
 
 ```bash
-mv "$CONTENT_ROOT/Travel/Joshua-Tree-Spring" "$CONTENT_ROOT/Travel/Joshua-Tree-2026"
+mv "$CONTENT_ROOT/content/Travel/Joshua-Tree-Spring" "$CONTENT_ROOT/content/Travel/Joshua-Tree-2026"
 npm run build      # `npm run deploy` will replace this once publish.mjs lands
 ```
 
@@ -345,7 +358,7 @@ photo-portfolio/
 ├── package.json
 ├── public/
 │   ├── _redirects              # Pages routing rules (legacy-key rewrites)
-│   └── derivatives → ../build/derivatives    # local-dev symlink (gitignored)
+│   └── derivatives → <content_root>/build/derivatives   # local-dev symlink (gitignored)
 ├── src/
 │   ├── content/
 │   │   ├── config.ts           # Zod schemas (album, folder, albumImage)
@@ -384,11 +397,7 @@ photo-portfolio/
 │   ├── manifest_to_yaml.mjs    # one-time SmugMug → content_root migration (not yet implemented)
 │   ├── smugmug_*.py            # legacy SmugMug crawl/download/auth helpers
 │   └── requirements.txt
-└── build/                      # gitignored
-    ├── derivatives/<image_id>/{480,960,1600,2400}.{avif,webp,jpg}, thumb.{avif,webp,jpg}
-    ├── image-meta.json         # dims + EXIF per image_id
-    ├── derivative-cache.json   # image_id → source sha256 (for cache invalidation)
-    └── legacy-keys.json        # mirrored from <content_root>/.legacy-keys.json
+└── (no build/ in this repo — build artifacts live under <content_root>/build/)
 ```
 
 ---
@@ -403,5 +412,6 @@ photo-portfolio/
 | `verify: plaintext password leaked into …` | A `password:` value from `meta.yaml` ended up in generated content. Should never happen — file a bug; in the meantime, inspect the offending file and remove. |
 | Photos look sideways | The pipeline respects EXIF orientation. If a single photo is wrong, fix its orientation tag (e.g. `exiftool -Orientation=1 -n file.jpg`) and rebuild. |
 | Album shows but photos are missing | Check `build/image-meta.json` for the album's `image_id` entries; rerun `npm run build` to repopulate the derivative cache. |
-| Photos 404 in local dev | Confirm `public/derivatives` symlinks to `../build/derivatives` and `PUBLIC_ASSETS_BASE_URL=/` is set in `.env`. |
+| `Expected …/content to exist` | Photos must live under `<content_root>/content/`, not directly under `<content_root>/`. If you have an older layout, `mkdir <content_root>/content && mv <content_root>/<folders> <content_root>/content/`. |
+| Photos 404 in local dev | Confirm `public/derivatives` symlinks to `<content_root>/build/derivatives` and `PUBLIC_ASSETS_BASE_URL=/` is set in `.env`. |
 | R2 upload partial-fails | (Phase 1: `publish.mjs` not yet implemented.) When it lands: rerun `npm run publish` — the upload cache resumes from where it left off. |

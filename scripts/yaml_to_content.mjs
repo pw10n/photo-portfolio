@@ -4,15 +4,15 @@
 // Also stamps album.id back into meta.yaml when missing, hashes passwords,
 // and mirrors <content_root>/.legacy-keys.json into build/legacy-keys.json.
 
-import { mkdir, readFile, readdir, rm, stat, writeFile, copyFile, rename } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rm, writeFile, copyFile, rename } from 'node:fs/promises';
 import { createHash, randomBytes } from 'node:crypto';
 import { dirname, relative, resolve, sep } from 'node:path';
 import yaml from 'js-yaml';
 import exifr from 'exifr';
+import { loadConfig } from './_config.mjs';
 
 const REPO_ROOT = resolve(import.meta.dirname, '..');
 const SRC_CONTENT = resolve(REPO_ROOT, 'src', 'content');
-const BUILD_DIR = resolve(REPO_ROOT, 'build');
 
 const IMAGE_EXT_RE = /\.(jpe?g|png)$/i;
 const ALBUM_FIELDS = new Set(['date', 'security_type', 'sort', 'images', 'hero', 'password', 'password_hint']);
@@ -55,21 +55,6 @@ function sha256Hex(bufs) {
   return h.digest('hex');
 }
 
-async function loadConfig() {
-  const cfgPath = resolve(REPO_ROOT, '.config.yaml');
-  const text = await readFile(cfgPath, 'utf8');
-  const cfg = yaml.load(text);
-  if (!cfg?.content_root) {
-    throw new Error('.config.yaml missing content_root');
-  }
-  const cr = resolve(cfg.content_root);
-  const st = await stat(cr).catch(() => null);
-  if (!st?.isDirectory()) {
-    throw new Error(`content_root does not exist or is not a directory: ${cr}`);
-  }
-  return { contentRoot: cr };
-}
-
 async function* walkDirs(root) {
   const entries = await readdir(root, { withFileTypes: true });
   yield { dir: root, entries };
@@ -80,8 +65,8 @@ async function* walkDirs(root) {
   }
 }
 
-function urlPathFor(contentRoot, dir) {
-  const rel = relative(contentRoot, dir);
+function urlPathFor(contentDir, dir) {
+  const rel = relative(contentDir, dir);
   if (rel === '') return '/';
   return '/' + rel.split(sep).join('/');
 }
@@ -262,10 +247,10 @@ async function ensureDir(p) {
   await mkdir(p, { recursive: true });
 }
 
-async function mirrorLegacyKeys(contentRoot) {
-  const src = resolve(contentRoot, '.legacy-keys.json');
-  const dst = resolve(BUILD_DIR, 'legacy-keys.json');
-  await ensureDir(BUILD_DIR);
+async function mirrorLegacyKeys(contentDir, buildDir) {
+  const src = resolve(contentDir, '.legacy-keys.json');
+  const dst = resolve(buildDir, 'legacy-keys.json');
+  await ensureDir(buildDir);
   try {
     await copyFile(src, dst);
     return true;
@@ -284,7 +269,7 @@ async function clearDir(p) {
 }
 
 async function main() {
-  const { contentRoot } = await loadConfig();
+  const { contentDir, buildDir } = await loadConfig({ ensureBuildDir: true });
 
   const albumsOutDir = resolve(SRC_CONTENT, 'albums');
   const foldersOutDir = resolve(SRC_CONTENT, 'folders');
@@ -292,13 +277,13 @@ async function main() {
   await clearDir(foldersOutDir);
 
   const dirRecords = [];
-  for await (const { dir, entries } of walkDirs(contentRoot)) {
-    if (dir === contentRoot) continue;
+  for await (const { dir, entries } of walkDirs(contentDir)) {
+    if (dir === contentDir) continue;
     const meta = await readMetaYaml(dir);
     if (!meta) continue;
-    const urlPath = urlPathFor(contentRoot, dir);
+    const urlPath = urlPathFor(contentDir, dir);
     const parentDir = dirname(dir);
-    const parentPath = parentDir === contentRoot ? null : urlPathFor(contentRoot, parentDir);
+    const parentPath = parentDir === contentDir ? null : urlPathFor(contentDir, parentDir);
     const kind = classify(meta, entries);
     dirRecords.push({ dir, entries, meta, urlPath, parentPath, kind });
   }
@@ -348,7 +333,7 @@ async function main() {
     }
   }
 
-  const hasLegacy = await mirrorLegacyKeys(contentRoot);
+  const hasLegacy = await mirrorLegacyKeys(contentDir, buildDir);
 
   console.log(`yaml_to_content: ${folderCount} folders, ${albumCount} albums`);
   console.log(`  legacy-keys: ${hasLegacy ? 'mirrored' : 'absent (wrote empty stub)'}`);
