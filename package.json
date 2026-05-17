@@ -1,0 +1,35 @@
+{
+  "name": "photo-portfolio",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "node scripts/build.mjs",
+    "astro:build": "astro build",
+    "preview": "astro preview",
+    "publish": "node scripts/publish.mjs",
+    "deploy": "npm run build && npm run publish",
+    "ingest": "node scripts/yaml_to_content.mjs",
+    "process-images": "node scripts/process_images.mjs",
+    "verify": "node scripts/verify.mjs",
+    "migrate": "node scripts/manifest_to_yaml.mjs"
+  },
+  "dependencies": {
+    "@astrojs/react": "^4.2.0",
+    "astro": "^5.1.0",
+    "exifr": "^7.1.3",
+    "js-yaml": "^4.1.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "sharp": "^0.34.0"
+  },
+  "devDependencies": {
+    "@astrojs/check": "^0.9.9",
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^25.8.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "typescript": "^5.7.0"
+  }
+}

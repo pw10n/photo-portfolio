@@ -1,5 +1,11 @@
+# Plan iteration scratch
 specs/.plan
+
+# One-time migration input (sensitive: contains plaintext passwords)
 scripts/manifest.json
+manifest.json
+
+# Python venv for legacy SmugMug helpers
 scripts/.venv/
 
 # Local-only config + secrets
@@ -8,3 +14,24 @@ scripts/.venv/
 
 # Migration script outputs
 download_report.json
+
+# Node / Astro
+node_modules/
+dist/
+.astro/
+build/
+
+# Generated content collections (rebuilt each `npm run build`)
+src/content/albums/
+src/content/folders/
+
+# Local test content (procedurally generated; never real photos)
+test-content/
+
+# Public dirs that are symlinked to build/ for local-mode asset serving
+public/derivatives
+public/originals
+
+# OS / editor
+.DS_Store
+*.swp
