@@ -1,0 +1,62 @@
+---
+import { derivativeUrl, type ImageFormat } from '../lib/asset-urls';
+import { getImageMeta } from '../lib/image-meta';
+
+interface Props {
+  imageId: string;
+  alt: string;
+  sizes?: string;
+  loading?: 'lazy' | 'eager';
+  fetchpriority?: 'auto' | 'high' | 'low';
+  className?: string;
+}
+
+const {
+  imageId,
+  alt,
+  sizes = '(max-width: 768px) 50vw, (max-width: 1280px) 33vw, 25vw',
+  loading = 'lazy',
+  fetchpriority = 'auto',
+  className,
+} = Astro.props;
+
+const DEFAULT_WIDTHS = [480, 960, 1600, 2400];
+const DEFAULT_FORMATS: ImageFormat[] = ['avif', 'webp', 'jpg'];
+
+const meta = await getImageMeta(imageId);
+const widths = meta?.widths?.length ? meta.widths : DEFAULT_WIDTHS;
+const formats: ImageFormat[] = meta?.formats?.length ? meta.formats : DEFAULT_FORMATS;
+
+const mimeFor = (fmt: ImageFormat) =>
+  fmt === 'jpg' ? 'image/jpeg' : `image/${fmt}`;
+
+const srcsetFor = (fmt: ImageFormat) =>
+  widths.map((w) => `${derivativeUrl(imageId, w, fmt)} ${w}w`).join(', ');
+
+const fallbackWidth = widths.includes(960) ? 960 : widths[Math.floor(widths.length / 2)] ?? widths[0];
+const fallbackSrc = derivativeUrl(imageId, fallbackWidth, 'jpg');
+
+const intrinsicWidth = meta?.width;
+const intrinsicHeight = meta?.height;
+---
+
+<picture class={className}>
+  {
+    formats
+      .filter((f) => f !== 'jpg')
+      .map((fmt) => (
+        <source type={mimeFor(fmt)} srcset={srcsetFor(fmt)} sizes={sizes} />
+      ))
+  }
+  <img
+    src={fallbackSrc}
+    srcset={formats.includes('jpg') ? srcsetFor('jpg') : undefined}
+    sizes={sizes}
+    alt={alt}
+    width={intrinsicWidth}
+    height={intrinsicHeight}
+    loading={loading}
+    decoding="async"
+    fetchpriority={fetchpriority}
+  />
+</picture>

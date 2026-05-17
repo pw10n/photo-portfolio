@@ -1,0 +1,19 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import HomePage from '../components/HomePage.astro';
+import { getCollection, type CollectionEntry } from 'astro:content';
+
+const albumEntries = await getCollection('albums');
+const folderEntries = await getCollection('folders');
+
+const albums = albumEntries
+  .filter((e: CollectionEntry<'albums'>) => e.data.privacy === 'public')
+  .map((e: CollectionEntry<'albums'>) => e.data);
+const folders = folderEntries
+  .filter((e: CollectionEntry<'folders'>) => e.data.privacy === 'public')
+  .map((e: CollectionEntry<'folders'>) => e.data);
+---
+
+<BaseLayout title="Prentice Wongvibulsin Photography">
+  <HomePage albums={albums} folders={folders} />
+</BaseLayout>

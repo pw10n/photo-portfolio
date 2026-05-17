@@ -1,0 +1,186 @@
+---
+import type { Album } from '../content/config';
+import Breadcrumbs from './Breadcrumbs.astro';
+import Thumbnail from './Thumbnail.astro';
+import Lightbox from './Lightbox.tsx';
+import PasswordGate from './PasswordGate.tsx';
+import { loadImageMeta, type ImageMetaEntry } from '../lib/image-meta';
+import { legacyKeysForAlbum } from '../lib/legacy-keys';
+
+interface Props {
+  album: Album;
+}
+
+const { album } = Astro.props;
+
+function buildCrumbs(a: Album): Array<{ name: string; url: string }> {
+  const segments = a.url_path.split('/').filter(Boolean);
+  const crumbs: Array<{ name: string; url: string }> = [];
+  let acc = '';
+  for (let i = 0; i < segments.length; i++) {
+    acc += '/' + segments[i];
+    crumbs.push({ name: segments[i], url: acc });
+  }
+  if (crumbs.length > 0) crumbs[crumbs.length - 1].name = a.name;
+  return crumbs;
+}
+
+const crumbs = buildCrumbs(album);
+
+const allMeta = await loadImageMeta();
+const albumMetas: Record<string, ImageMetaEntry> = {};
+for (const img of album.images) {
+  if (allMeta[img.image_id]) albumMetas[img.image_id] = allMeta[img.image_id];
+}
+
+const legacyKeys = await legacyKeysForAlbum(album.url_path);
+const isGated = album.security_type === 'password';
+---
+
+<Breadcrumbs crumbs={crumbs} />
+
+{
+  isGated && (
+    <PasswordGate
+      client:load
+      albumId={album.id}
+      albumName={album.name}
+      passwordHash={album.password_hash!}
+      passwordSalt={album.password_salt!}
+      passwordHint={album.password_hint}
+      contentSelector="#album-content"
+    />
+  )
+}
+
+<div id="album-content" class:list={['album-content', { 'gated-initially-hidden': isGated }]}>
+  <header class="album-header">
+    <h1>{album.name}</h1>
+    <div class="album-meta">
+      {album.date && <time>{album.date}</time>}
+      {album.images.length > 0 && (
+        <span>{album.images.length} photo{album.images.length === 1 ? '' : 's'}</span>
+      )}
+      {album.privacy === 'unlisted' && <span class="badge">Unlisted</span>}
+    </div>
+    {album.description && <p class="description">{album.description}</p>}
+    {album.keywords.length > 0 && (
+      <ul class="keywords">
+        {album.keywords.map((k) => <li>{k}</li>)}
+      </ul>
+    )}
+  </header>
+
+  {
+    album.images.length > 0 && (
+      <ul class="thumb-grid" id="album-thumbs">
+        {album.images.map((img, i) => (
+          <li>
+            <button
+              type="button"
+              class="thumb-trigger"
+              data-image-id={img.image_id}
+              data-index={i}
+              aria-label={img.caption || img.filename}
+            >
+              <div class="thumb">
+                <Thumbnail
+                  imageId={img.image_id}
+                  alt={img.caption || img.filename}
+                  loading={i < 8 ? 'eager' : 'lazy'}
+                />
+              </div>
+            </button>
+          </li>
+        ))}
+      </ul>
+    )
+  }
+
+  {album.images.length === 0 && (
+    <p class="empty">No images in this album yet.</p>
+  )}
+</div>
+
+<Lightbox
+  client:load
+  albumPath={album.url_path}
+  albumName={album.name}
+  images={album.images}
+  imageMetas={albumMetas}
+  legacyKeys={legacyKeys}
+/>
+
+<style>
+  .album-header {
+    margin-bottom: 1.5rem;
+  }
+  .album-header h1 {
+    font-family: var(--font-serif);
+    font-weight: 500;
+    font-size: clamp(1.75rem, 4vw, 2.5rem);
+    margin: 0 0 0.5rem;
+  }
+  .album-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 1rem;
+    color: var(--muted);
+    font-size: 0.875rem;
+    margin-bottom: 0.75rem;
+  }
+  .album-meta .badge {
+    background: var(--border);
+    color: var(--fg);
+    padding: 0.125rem 0.5rem;
+    border-radius: 2px;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  .description {
+    margin: 0 0 0.75rem;
+    max-width: 65ch;
+  }
+  .keywords {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.375rem;
+  }
+  .keywords li {
+    font-size: 0.75rem;
+    color: var(--muted);
+    border: 1px solid var(--border);
+    padding: 0.125rem 0.5rem;
+    border-radius: 999px;
+  }
+  .thumb-grid {
+    margin-top: 1.5rem;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .thumb-trigger {
+    display: block;
+    width: 100%;
+    padding: 0;
+    margin: 0;
+    border: 0;
+    background: transparent;
+    cursor: pointer;
+  }
+  .thumb-trigger:focus-visible {
+    outline: 2px solid var(--fg);
+    outline-offset: 2px;
+  }
+  .gated-initially-hidden {
+    display: none;
+  }
+  .empty {
+    color: var(--muted);
+    padding: 2rem 0;
+  }
+</style>

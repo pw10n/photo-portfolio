@@ -1,0 +1,137 @@
+---
+import type { Album, Folder } from '../content/config';
+import Thumbnail from './Thumbnail.astro';
+
+interface Props {
+  albums: Album[];
+  folders: Folder[];
+}
+
+const { albums, folders } = Astro.props;
+
+const RECENT_COUNT = 12;
+
+const sortedAlbums = [...albums]
+  .filter((a) => a.images.length > 0)
+  .sort((a, b) => {
+    const da = a.date ?? '';
+    const db = b.date ?? '';
+    return db.localeCompare(da);
+  })
+  .slice(0, RECENT_COUNT);
+
+const topLevelFolders = folders.filter(
+  (f) => f.parent_path === null || f.parent_path === '/' || f.parent_path === '',
+);
+
+function heroImageIdFor(album: Album): string | null {
+  if (album.images.length === 0) return null;
+  if (album.hero) {
+    const found = album.images.find((img) => img.filename === album.hero);
+    if (found) return found.image_id;
+  }
+  return album.images[0].image_id;
+}
+---
+
+<section class="hero">
+  <h1>Photography</h1>
+  <p>A selection of recent work.</p>
+</section>
+
+{
+  sortedAlbums.length > 0 && (
+    <section class="home-section">
+      <h2>Recently Added</h2>
+      <ul class="thumb-grid">
+        {sortedAlbums.map((album, i) => {
+          const heroId = heroImageIdFor(album);
+          return (
+            <li>
+              <a href={album.url_path}>
+                <div class="thumb">
+                  {heroId && (
+                    <Thumbnail
+                      imageId={heroId}
+                      alt={album.name}
+                      loading={i < 4 ? 'eager' : 'lazy'}
+                    />
+                  )}
+                </div>
+                <span class="thumb-label">
+                  {album.name}
+                  {album.date && <span class="meta">{album.date}</span>}
+                </span>
+              </a>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  )
+}
+
+{
+  topLevelFolders.length > 0 && (
+    <section class="home-section">
+      <h2>Browse</h2>
+      <ul class="folder-list">
+        {topLevelFolders.map((f) => (
+          <li>
+            <a href={f.url_path}>{f.name}</a>
+          </li>
+        ))}
+      </ul>
+    </section>
+  )
+}
+
+{sortedAlbums.length === 0 && topLevelFolders.length === 0 && (
+  <p class="empty">No content yet. Once `npm run build` runs against a populated content repo, albums will appear here.</p>
+)}
+
+<style>
+  .hero {
+    padding: 2rem 0 3rem;
+  }
+  .hero h1 {
+    font-family: var(--font-serif);
+    font-size: clamp(2rem, 5vw, 3rem);
+    font-weight: 400;
+    margin: 0 0 0.5rem;
+  }
+  .hero p {
+    color: var(--muted);
+    font-size: 1.125rem;
+    margin: 0;
+  }
+  .home-section {
+    margin-bottom: 3rem;
+  }
+  .home-section h2 {
+    font-size: 1rem;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    margin: 0 0 1rem;
+  }
+  .thumb-grid {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .folder-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem 1.5rem;
+    font-size: 1.125rem;
+  }
+  .empty {
+    color: var(--muted);
+    padding: 2rem 0;
+  }
+</style>

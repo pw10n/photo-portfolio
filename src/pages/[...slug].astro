@@ -1,0 +1,68 @@
+---
+import { getCollection } from 'astro:content';
+import BaseLayout from '../layouts/BaseLayout.astro';
+import FolderPage from '../components/FolderPage.astro';
+import AlbumPage from '../components/AlbumPage.astro';
+import type { Album, Folder } from '../content/config';
+
+export async function getStaticPaths() {
+  const [albums, folders] = await Promise.all([
+    getCollection('albums'),
+    getCollection('folders'),
+  ]);
+
+  const albumByPath = new Map<string, Album>();
+  for (const entry of albums) albumByPath.set(entry.data.url_path, entry.data);
+
+  const folderByPath = new Map<string, Folder>();
+  for (const entry of folders) folderByPath.set(entry.data.url_path, entry.data);
+
+  const paths: Array<{
+    params: { slug: string };
+    props: { kind: 'folder' | 'album'; folder?: Folder; album?: Album; childFolders?: Folder[]; childAlbums?: Album[] };
+  }> = [];
+
+  for (const folder of folderByPath.values()) {
+    const slug = folder.url_path.replace(/^\//, '');
+    if (!slug) continue;
+    const childFolders = folder.child_paths
+      .map((p) => folderByPath.get(p))
+      .filter((f): f is Folder => Boolean(f));
+    const childAlbums = folder.child_paths
+      .map((p) => albumByPath.get(p))
+      .filter((a): a is Album => Boolean(a));
+    paths.push({
+      params: { slug },
+      props: { kind: 'folder', folder, childFolders, childAlbums },
+    });
+  }
+
+  for (const album of albumByPath.values()) {
+    const slug = album.url_path.replace(/^\//, '');
+    if (!slug) continue;
+    paths.push({
+      params: { slug },
+      props: { kind: 'album', album },
+    });
+  }
+
+  return paths;
+}
+
+const { kind, folder, album, childFolders, childAlbums } = Astro.props;
+
+const title = kind === 'folder' ? folder!.name : album!.name;
+const description = kind === 'folder' ? folder!.description : album!.description;
+const privacy = kind === 'folder' ? folder!.privacy : album!.privacy;
+const noindex = privacy === 'unlisted' || (kind === 'album' && album!.security_type === 'password');
+---
+
+<BaseLayout title={title} description={description} noindex={noindex}>
+  {
+    kind === 'folder' ? (
+      <FolderPage folder={folder!} childFolders={childFolders ?? []} childAlbums={childAlbums ?? []} />
+    ) : (
+      <AlbumPage album={album!} />
+    )
+  }
+</BaseLayout>

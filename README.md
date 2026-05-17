@@ -34,19 +34,17 @@ This repo holds **only the tooling** — Astro project, build scripts, configs. 
 
 - **Astro** generates the site. Content collections are typed; lightbox + password gate are interactive islands.
 - **sharp** encodes responsive AVIF/WebP/JPEG derivatives + 200×200 thumbnails at widths 480/960/1600/2400.
-- **R2** serves all image bytes (derivatives + originals) from `assets.example.com`.
+- **R2** serves all image bytes (derivatives + originals) from `assets.prenticew.com` in production. For local dev, derivatives are served by the Astro dev server via a `public/derivatives → ../build/derivatives` symlink.
 
 ---
 
 ## Prerequisites
 
 - Node 20+ (for Astro + sharp)
-- Python 3.11+ (only for the few utility scripts in `scripts/`)
-- A Cloudflare account with:
-  - A Pages project (`photo-portfolio`)
-  - An R2 bucket bound to `assets.example.com`
-  - An API token with `Pages:Edit` + `Account:Read`
-  - An R2 access key pair
+- Python 3.11+ (only for the SmugMug helper scripts; not needed for local dev)
+- For production deploy only: a Cloudflare account with Pages + R2 + API token + R2 access key pair
+
+For local development, none of the Cloudflare bits are required.
 
 ---
 
@@ -58,19 +56,40 @@ cd photo-portfolio
 npm install
 
 cp .config.example.yaml .config.yaml
-$EDITOR .config.yaml      # set content_root: <absolute path to your content repo>
-
-cp .env.example .env
-$EDITOR .env              # set CLOUDFLARE_API_TOKEN, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
+$EDITOR .config.yaml      # set content_root: <absolute path>
 ```
 
 `.config.yaml` and `.env` are gitignored. Never commit them.
 
-Verify setup:
+---
+
+## Local development with test content
+
+The fastest way to see the site work end-to-end against fake but real photos:
 
 ```bash
-npm run build            # full build into dist/; does not publish
+# 1. Generate procedural test JPEGs into ./test-content/
+node scripts/seed_test_content.mjs
+
+# 2. Point .config.yaml at the fixture
+echo "content_root: $(pwd)/test-content" > .config.yaml
+
+# 3. Local-mode assets: relative URLs + symlink derivatives into public/
+echo "PUBLIC_ASSETS_BASE_URL=/" > .env
+ln -sfn ../build/derivatives public/derivatives
+
+# 4. Build the full chain (yaml → JSON → derivatives → astro build → verify)
+npm run build
+
+# 5. Either serve the built site:
+npx astro preview                # http://localhost:4321
+# …or run the live dev server with HMR:
+npm run dev                      # http://localhost:4321
 ```
+
+After this, edit any photo, `meta.yaml`, or component and re-run `npm run build` (or rely on HMR for component edits). Drop your own JPEGs into `test-content/Sample/Sunset-Hike/` and they'll be auto-discovered.
+
+To switch to your real content repo later, just change `content_root` in `.config.yaml` — same scripts, same commands.
 
 ---
 
@@ -131,10 +150,10 @@ You **don't** write:
 ### 3. Build and publish
 
 ```bash
-npm run deploy
+npm run build      # `npm run deploy` will replace this once publish.mjs lands
 ```
 
-This runs the full chain: ingest YAML → encode derivatives → render site → sync R2 → deploy Pages.
+This runs the local build chain: ingest YAML → encode derivatives → render site → verify invariants. Once `publish.mjs` lands, `npm run deploy` will also sync R2 + deploy Pages.
 
 After the build, open `meta.yaml` again and you'll see a new line:
 
@@ -165,7 +184,7 @@ Drop the new file in over the old one (same filename). Rebuild.
 
 ```bash
 cp ~/exports/joshua-tree/IMG_4501.jpg "$CONTENT_ROOT/Travel/Joshua-Tree-Spring/"
-npm run deploy
+npm run build      # `npm run deploy` will replace this once publish.mjs lands
 ```
 
 The `image_id` is derived from `album.id + filename`, so it doesn't change — share URLs survive, only the changed file gets re-encoded.
@@ -174,7 +193,7 @@ The `image_id` is derived from `album.id + filename`, so it doesn't change — s
 
 ```bash
 mv "$CONTENT_ROOT/Travel/Joshua-Tree-Spring" "$CONTENT_ROOT/Travel/Joshua-Tree-2026"
-npm run deploy
+npm run build      # `npm run deploy` will replace this once publish.mjs lands
 ```
 
 The URL changes (`/Travel/Joshua-Tree-2026`) but `album.id` lives in the YAML, so all `image_id` values are unchanged — no R2 churn.
@@ -222,11 +241,13 @@ images:
     keywords: []
 ```
 
-### Set a custom hero image
+### Set a custom listing thumbnail
 
 ```yaml
-hero: IMG_4502.jpg              # default is the first image
+hero: IMG_4502.jpg              # which image represents the album in folder/home grids (default: first image)
 ```
+
+The `hero` field controls which image is used as the album's thumbnail in folder pages and the homepage "Recently Added" grid. It is not rendered on the album page itself.
 
 ### Change image ordering
 
@@ -271,15 +292,31 @@ sort: date                      # filename | date | manual
 
 ## Build & publish
 
-| Command | What it does |
-|---|---|
-| `npm run build` | YAML → content collections → encode derivatives → `astro build` → invariant checks |
-| `npm run publish` | Sync R2 deltas → `wrangler pages deploy dist/` |
-| `npm run deploy` | `build` then `publish` |
+| Command | What it does | Status |
+|---|---|---|
+| `npm run build` | `yaml_to_content` → `process_images` → `astro build` → `verify` (10 invariants) | ✓ works |
+| `npm run dev` | Astro dev server with HMR (requires content already built) | ✓ works |
+| `npm run publish` | Sync R2 deltas → `wrangler pages deploy dist/` | ⏳ not yet implemented |
+| `npm run deploy` | `build` then `publish` | ⏳ blocked on `publish` |
 
-Re-runs are idempotent. The derivative cache short-circuits on unchanged source files; R2 sync skips unchanged objects.
+Re-runs are idempotent. The derivative cache (`build/derivative-cache.json`) short-circuits on unchanged source files via sha256.
 
 If a build invariant fails (e.g. missing password for a protected album, duplicate album `id:`, plaintext password leaked into `src/content/`), the chain halts with a non-zero exit. **Fix the root cause** — don't bypass.
+
+### Verify (build invariants)
+
+`scripts/verify.mjs` runs 10 checks per TDD §14:
+
+1. Every album `url_path` has a matching `dist/<path>/index.html`
+2. Every folder `url_path` has a matching HTML page
+3. Every image has at least one derivative at width 960 (or the largest available width if smaller)
+4. No `/private/` paths in `dist/index.html` or any `sitemap-*.xml`
+5. Every password-protected album has a 64-char hex hash + salt; no plaintext password appears anywhere under `src/content/` or `dist/`
+6. `dist/_redirects` contains both legacy-key rewrite rules
+7. Random sample of 20 derivatives: actual width never exceeds source intrinsic
+8. Every `.legacy-keys.json` entry resolves to an existing album + filename
+9. Every album has an `id:` matching `^alb_[A-Za-z0-9]+$`, no duplicates
+10. Native `image_id` namespace and legacy SmugMug key namespace don't overlap
 
 ---
 
@@ -300,27 +337,58 @@ Native share URLs from the lightbox always use `image_id`. Legacy keys are resol
 
 ```
 photo-portfolio/
-├── .config.yaml              # gitignored; { content_root: <absolute path> }
-├── .config.example.yaml      # committed; documents the shape
-├── .env                      # gitignored; CF tokens
+├── .config.yaml                # gitignored; { content_root: <absolute path> }
+├── .config.example.yaml        # committed; documents the shape
+├── .env                        # gitignored; PUBLIC_ASSETS_BASE_URL, CF tokens
 ├── astro.config.mjs
+├── tsconfig.json
 ├── package.json
 ├── public/
-│   └── _redirects            # Pages routing rules
+│   ├── _redirects              # Pages routing rules (legacy-key rewrites)
+│   └── derivatives → ../build/derivatives    # local-dev symlink (gitignored)
 ├── src/
-│   ├── content/              # gitignored; regenerated each build
-│   ├── components/           # Astro + island components
+│   ├── content/
+│   │   ├── config.ts           # Zod schemas (album, folder, albumImage)
+│   │   ├── albums/             # gitignored; generated each build
+│   │   └── folders/            # gitignored; generated each build
+│   ├── components/
+│   │   ├── BaseLayout (in layouts/)
+│   │   ├── HomePage.astro
+│   │   ├── FolderPage.astro
+│   │   ├── AlbumPage.astro
+│   │   ├── ResponsivePicture.astro
+│   │   ├── Thumbnail.astro
+│   │   ├── Breadcrumbs.astro
+│   │   ├── Lightbox.tsx        # React island
+│   │   └── PasswordGate.tsx    # React island
 │   ├── layouts/
+│   │   └── BaseLayout.astro
 │   ├── lib/
+│   │   ├── asset-urls.ts       # R2 / local URL builders
+│   │   ├── image-meta.ts       # loads build/image-meta.json
+│   │   ├── legacy-keys.ts      # loads build/legacy-keys.json + per-album slice
+│   │   ├── password.ts         # Web Crypto sha256+salt verify
+│   │   └── url-state.ts        # pathname ⇄ { album, key }
 │   ├── pages/
+│   │   ├── index.astro         # → HomePage
+│   │   └── [...slug].astro     # → FolderPage | AlbumPage
 │   └── styles/
+│       └── global.css
 ├── scripts/
-│   ├── yaml_to_content.mjs   # ingest content repo → src/content/
-│   ├── process_images.mjs    # encode derivatives
-│   ├── build.mjs             # invoked by `npm run build`
-│   ├── publish.mjs           # invoked by `npm run publish`
-│   └── verify.mjs            # build invariants
-└── build/                    # gitignored; derivative cache, image metadata, upload cache
+│   ├── seed_test_content.mjs   # generate procedural test-content/ (local dev only)
+│   ├── yaml_to_content.mjs     # walk content_root → src/content/*.json
+│   ├── process_images.mjs      # sharp → build/derivatives/ + image-meta.json
+│   ├── build.mjs               # orchestrator invoked by `npm run build`
+│   ├── verify.mjs              # 10 build invariants
+│   ├── publish.mjs             # R2 sync + wrangler pages deploy (not yet implemented)
+│   ├── manifest_to_yaml.mjs    # one-time SmugMug → content_root migration (not yet implemented)
+│   ├── smugmug_*.py            # legacy SmugMug crawl/download/auth helpers
+│   └── requirements.txt
+└── build/                      # gitignored
+    ├── derivatives/<image_id>/{480,960,1600,2400}.{avif,webp,jpg}, thumb.{avif,webp,jpg}
+    ├── image-meta.json         # dims + EXIF per image_id
+    ├── derivative-cache.json   # image_id → source sha256 (for cache invalidation)
+    └── legacy-keys.json        # mirrored from <content_root>/.legacy-keys.json
 ```
 
 ---
@@ -329,9 +397,11 @@ photo-portfolio/
 
 | Symptom | Fix |
 |---|---|
-| `Error: content_root does not exist` | Check the path in `.config.yaml` |
-| `Build halted: album <slug> has security_type=password but no password` | Add a `password:` to that album's `meta.yaml` |
-| `Build halted: duplicate album id` | Two albums share the same `id:`. Rare. Delete the duplicated `id:` line from one of them and rebuild — it'll get a fresh stamp. |
+| `Error: content_root does not exist` | Check the path in `.config.yaml`. For local dev, point it at `./test-content/` and run `node scripts/seed_test_content.mjs`. |
+| `Build halted: album <slug> has security_type=password but no password` | Add a `password:` to that album's `meta.yaml`. |
+| `verify: duplicate album id` | Two albums share the same `id:`. Rare. Delete the duplicated `id:` line from one of them and rebuild — it'll get a fresh stamp. |
+| `verify: plaintext password leaked into …` | A `password:` value from `meta.yaml` ended up in generated content. Should never happen — file a bug; in the meantime, inspect the offending file and remove. |
 | Photos look sideways | The pipeline respects EXIF orientation. If a single photo is wrong, fix its orientation tag (e.g. `exiftool -Orientation=1 -n file.jpg`) and rebuild. |
 | Album shows but photos are missing | Check `build/image-meta.json` for the album's `image_id` entries; rerun `npm run build` to repopulate the derivative cache. |
-| R2 upload partial-fails | Rerun `npm run publish` — the upload cache resumes from where it left off. |
+| Photos 404 in local dev | Confirm `public/derivatives` symlinks to `../build/derivatives` and `PUBLIC_ASSETS_BASE_URL=/` is set in `.env`. |
+| R2 upload partial-fails | (Phase 1: `publish.mjs` not yet implemented.) When it lands: rerun `npm run publish` — the upload cache resumes from where it left off. |

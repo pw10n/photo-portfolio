@@ -1,0 +1,30 @@
+---
+import { thumbUrl, type ImageFormat } from '../lib/asset-urls';
+
+interface Props {
+  imageId: string;
+  alt: string;
+  loading?: 'lazy' | 'eager';
+}
+
+const { imageId, alt, loading = 'lazy' } = Astro.props;
+const formats: ImageFormat[] = ['avif', 'webp', 'jpg'];
+const mimeFor = (fmt: ImageFormat) =>
+  fmt === 'jpg' ? 'image/jpeg' : `image/${fmt}`;
+---
+
+<picture>
+  {
+    formats
+      .filter((f) => f !== 'jpg')
+      .map((fmt) => <source type={mimeFor(fmt)} srcset={thumbUrl(imageId, fmt)} />)
+  }
+  <img
+    src={thumbUrl(imageId, 'jpg')}
+    alt={alt}
+    width="200"
+    height="200"
+    loading={loading}
+    decoding="async"
+  />
+</picture>

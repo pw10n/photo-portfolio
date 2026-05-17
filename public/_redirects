@@ -1,0 +1,7 @@
+# Preserve legacy SmugMug deep-link URLs.
+# `:key` may be a native image_id (11-char lowercase base32) or a legacy SmugMug
+# image_key; the lightbox island resolves either form. The trailing wildcard
+# absorbs SmugMug size suffixes (`/A`, `/L`, `/M`, `/X2`, `/X3`, ...).
+# Status 200 = rewrite (URL preserved in the browser).
+/*/i-:key      /:splat/index.html   200
+/*/i-:key/*    /:splat/index.html   200
