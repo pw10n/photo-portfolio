@@ -9,7 +9,8 @@
     "build:local": "node scripts/setup_local.mjs && PROFILE=local node scripts/build.mjs",
     "preview": "PROFILE=local astro preview",
     "setup:local": "node scripts/setup_local.mjs",
-    "publish": "node scripts/publish.mjs",
+    "cf:setup": "node --env-file=.env scripts/cf_setup.mjs",
+    "publish": "node --env-file=.env scripts/publish.mjs",
     "deploy": "npm run build && npm run publish",
     "ingest": "node scripts/yaml_to_content.mjs",
     "process-images": "node scripts/process_images.mjs",
@@ -18,6 +19,7 @@
   },
   "dependencies": {
     "@astrojs/react": "^4.2.0",
+    "@aws-sdk/client-s3": "^3.700.0",
     "astro": "^5.1.0",
     "exifr": "^7.1.3",
     "js-yaml": "^4.1.0",
@@ -31,6 +33,7 @@
     "@types/node": "^25.8.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "wrangler": "^3.90.0"
   }
 }
