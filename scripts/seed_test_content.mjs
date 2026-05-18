@@ -136,6 +136,24 @@ function folderMetaYaml(folder) {
 async function main() {
   console.log(`Seeding ${ROOT}`);
   await mkdir(ROOT, { recursive: true });
+  await mkdir(PORTFOLIO_ROOT, { recursive: true });
+
+  // Also write a site.yaml so local dev works without manual setup.
+  const sitePath = resolve(PORTFOLIO_ROOT, 'site.yaml');
+  const siteYaml = [
+    `site_url: http://localhost:4321`,
+    `assets_base_url: ""`,
+    `name: "Test Portfolio"`,
+    `short_name: "Test"`,
+    `tagline: "Procedurally generated fixtures for local UI work."`,
+    `copyright_holder: "Test Fixture"`,
+    `homepage:`,
+    `  hero_title: "Test Portfolio"`,
+    `  hero_subtitle: "Fixtures for local development."`,
+    ``,
+  ].join('\n');
+  await writeFile(sitePath, siteYaml);
+  console.log(`  wrote ${sitePath}`);
 
   for (const group of FIXTURES) {
     const folderPath = resolve(ROOT, group.folder.url_name);

@@ -60,11 +60,16 @@ git clone <repo-url> photo-portfolio
 cd photo-portfolio
 npm install
 
+# Point at your portfolio directory
 cp .config.example.yaml .config.yaml
 $EDITOR .config.yaml      # set content_root: <absolute path>
+
+# Create site-wide config under content_root (site_url, name, etc.)
+cp .site.example.yaml "$(yq .content_root .config.yaml | tr -d '"')/site.yaml"
+$EDITOR "$(yq .content_root .config.yaml | tr -d '"')/site.yaml"
 ```
 
-`.config.yaml` and `.env` are gitignored. Never commit them.
+`.config.yaml` and `.env` are gitignored. `<content_root>/site.yaml` lives outside the repo so the tooling is reusable across portfolios — never commit it to this repo either.
 
 ---
 
@@ -73,7 +78,7 @@ $EDITOR .config.yaml      # set content_root: <absolute path>
 The fastest way to see the site work end-to-end against fake but real photos:
 
 ```bash
-# 1. Generate procedural test JPEGs into ./test-content/
+# 1. Generate procedural test JPEGs + site.yaml into ./test-content/
 node scripts/seed_test_content.mjs
 
 # 2. Point .config.yaml at the fixture
@@ -106,6 +111,7 @@ To switch to your real content repo later, just change `content_root` in `.confi
 
 ```
 <content_root>/
+├── site.yaml                      # site-wide config (site_url, name, etc.)
 ├── content/
 │   ├── .legacy-keys.json          # auto-maintained; preserves legacy-site deep links
 │   ├── Travel/

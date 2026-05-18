@@ -1,6 +1,7 @@
 ---
 import type { Album, Folder } from '../content/config';
 import Thumbnail from './Thumbnail.astro';
+import { loadSite } from '../lib/site';
 
 interface Props {
   albums: Album[];
@@ -8,6 +9,7 @@ interface Props {
 }
 
 const { albums, folders } = Astro.props;
+const site = loadSite();
 
 const RECENT_COUNT = 12;
 
@@ -35,8 +37,8 @@ function heroImageIdFor(album: Album): string | null {
 ---
 
 <section class="hero">
-  <h1>Photography</h1>
-  <p>A selection of recent work.</p>
+  {site.homepage.hero_title && <h1>{site.homepage.hero_title}</h1>}
+  {site.homepage.hero_subtitle && <p>{site.homepage.hero_subtitle}</p>}
 </section>
 
 {

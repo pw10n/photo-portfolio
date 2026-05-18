@@ -1,0 +1,24 @@
+# Copy to <content_root>/site.yaml and edit. This file lives outside the
+# repo so the tooling can be cloned and pointed at any portfolio.
+#
+# Required keys: site_url, assets_base_url, name.
+# All other keys are optional and have sensible defaults.
+
+# Absolute URL where the site is served (production hostname).
+# Used for sitemap.xml and Open Graph canonical URLs.
+site_url: https://gallery.example.com
+
+# Absolute URL where image bytes are served (R2 custom domain in production).
+# Local dev override: set PUBLIC_ASSETS_BASE_URL=/ in .env to serve via the
+# Astro dev server via the public/derivatives symlink.
+assets_base_url: https://assets.example.com
+
+# Display strings used throughout the site.
+name: "Example Photography"
+short_name: "Example"            # optional; defaults to name
+tagline: "A selection of recent work."
+copyright_holder: "Your Name Here"
+
+homepage:
+  hero_title: "Photography"
+  hero_subtitle: "A selection of recent work."
