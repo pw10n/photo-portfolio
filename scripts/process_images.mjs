@@ -28,9 +28,10 @@ const FORMATS = ['avif', 'webp', 'jpg'];
 const QUALITY = { avif: 50, webp: 75, jpg: 82 };
 const THUMB_SIZE = 200;
 
-// Default: cap at 8 (most Macs have <= 8 perf cores; diminishing returns above).
-// Override with CONCURRENCY env var for bigger boxes.
-const DEFAULT_CONCURRENCY = Math.max(1, Math.min(8, cpus().length));
+// Default: cap at 4 (server has <= 4 cores; diminishing returns above on the
+// machines we actually deploy on). Override with CONCURRENCY env var for
+// bigger boxes — e.g. CONCURRENCY=8 on an Apple Silicon Mac.
+const DEFAULT_CONCURRENCY = Math.max(1, Math.min(4, cpus().length));
 const CONCURRENCY = Math.max(1, Number(process.env.CONCURRENCY) || DEFAULT_CONCURRENCY);
 
 async function readJson(path, fallback) {
