@@ -4,6 +4,7 @@
 // Halts at the first non-zero exit.
 
 import { spawn } from 'node:child_process';
+import { lstat, unlink } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { loadConfig } from './_config.mjs';
 
@@ -43,11 +44,37 @@ async function verifyConfig() {
   }
 }
 
+async function stripLocalDerivativesSymlink() {
+  // setup_local.mjs symlinks public/derivatives → <buildDir>/derivatives so
+  // PROFILE=local builds and dev can serve encoded images. For prod, that
+  // symlink must be removed before `astro build` — otherwise Astro follows
+  // it and copies ~110 GB / 200k+ files into dist/, blowing past Pages'
+  // 25k-file deploy limit. `npm run dev`/`build:local` recreates it.
+  const path = resolve(REPO_ROOT, 'public', 'derivatives');
+  try {
+    const s = await lstat(path);
+    if (s.isSymbolicLink()) {
+      await unlink(path);
+      console.log(`✓ removed dev symlink: ${path}`);
+    }
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw err;
+  }
+}
+
 async function main() {
+  const skipProcess = process.argv.includes('--skip-process');
   const totalStart = Date.now();
   await verifyConfig();
   await step('yaml_to_content', 'node', ['scripts/yaml_to_content.mjs']);
-  await step('process_images', 'node', ['scripts/process_images.mjs']);
+  if (skipProcess) {
+    console.log('\n⏭  process_images skipped (--skip-process)');
+  } else {
+    await step('process_images', 'node', ['scripts/process_images.mjs']);
+  }
+  if (process.env.PROFILE !== 'local') {
+    await stripLocalDerivativesSymlink();
+  }
   await step('astro build', 'npx', ['--no-install', 'astro', 'build']);
   await step('verify', 'node', ['scripts/verify.mjs']);
   const totalSecs = ((Date.now() - totalStart) / 1000).toFixed(1);
