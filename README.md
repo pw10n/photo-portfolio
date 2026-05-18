@@ -84,19 +84,13 @@ node scripts/seed_test_content.mjs
 # 2. Point .config.yaml at the fixture
 echo "content_root: $(pwd)/test-content" > .config.yaml
 
-# 3. Local-mode assets: relative URLs + symlink derivatives into public/
-echo "PUBLIC_ASSETS_BASE_URL=/" > .env
-ln -sfn ../test-content/build/derivatives public/derivatives
-# (For a non-test content_root, use the absolute path:
-#   ln -sfn /mnt/nfs-share/Portfolio/build/derivatives public/derivatives)
-
-# 4. Build the full chain (yaml → JSON → derivatives → astro build → verify)
-npm run build
-
-# 5. Either serve the built site:
-npx astro preview                # http://localhost:4321
-# …or run the live dev server with HMR:
-npm run dev                      # http://localhost:4321
+# 3. Build + serve. `npm run dev` and `npm run build:local` auto-create the
+#    public/derivatives symlink and load <content_root>/site.local.yaml
+#    (or apply built-in localhost defaults if it's absent).
+npm run dev                      # http://localhost:4321 with HMR
+# …or for a static preview:
+npm run build:local
+npm run preview                  # http://localhost:4321
 ```
 
 After this, edit any photo, `meta.yaml`, or component and re-run `npm run build` (or rely on HMR for component edits). Drop your own JPEGs into `test-content/Sample/Sunset-Hike/` and they'll be auto-discovered.
@@ -313,8 +307,11 @@ sort: date                      # filename | date | manual
 
 | Command | What it does | Status |
 |---|---|---|
-| `npm run build` | `yaml_to_content` → `process_images` → `astro build` → `verify` (10 invariants) | ✓ works |
-| `npm run dev` | Astro dev server with HMR (requires content already built) | ✓ works |
+| `npm run build` | Production: `yaml_to_content` → `process_images` → `astro build` → `verify`. Uses bare `site.yaml`. | ✓ works |
+| `npm run build:local` | Same chain but with `PROFILE=local` (localhost URLs, public/derivatives symlink). | ✓ works |
+| `npm run dev` | Auto-sets up symlinks + runs Astro dev server with HMR on `PROFILE=local`. | ✓ works |
+| `npm run preview` | Serves the last-built `dist/`. | ✓ works |
+| `npm run setup:local` | Idempotent: creates the `public/derivatives` symlink and a `site.local.yaml` stub if absent. | ✓ works |
 | `npm run publish` | Sync R2 deltas → `wrangler pages deploy dist/` | ⏳ not yet implemented |
 | `npm run deploy` | `build` then `publish` | ⏳ blocked on `publish` |
 

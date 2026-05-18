@@ -15,28 +15,64 @@ export type SiteConfig = {
 
 const REQUIRED = ['site_url', 'name'] as const;
 
+// Built-in defaults for known profile names. site.<profile>.yaml in
+// content_root is optional and shallow-merges on top of these.
+const PROFILE_DEFAULTS: Record<string, Partial<SiteConfig>> = {
+  local: {
+    site_url: 'http://localhost:4321',
+    assets_base_url: '',
+  },
+};
+
 let cache: SiteConfig | null = null;
+
+function tryReadYaml(path: string): Record<string, unknown> | null {
+  try {
+    return (yaml.load(readFileSync(path, 'utf8')) ?? {}) as Record<string, unknown>;
+  } catch (err: unknown) {
+    if ((err as { code?: string }).code === 'ENOENT') return null;
+    throw err;
+  }
+}
+
+function mergeProfile(base: Record<string, unknown>, override: Record<string, unknown> | Partial<SiteConfig> | null): Record<string, unknown> {
+  if (!override) return base;
+  const baseHome = (base.homepage as Record<string, unknown>) ?? {};
+  const overHome = (override as Record<string, unknown>).homepage as Record<string, unknown> | undefined;
+  return {
+    ...base,
+    ...(override as Record<string, unknown>),
+    homepage: { ...baseHome, ...(overHome ?? {}) },
+  };
+}
 
 export function loadSite(): SiteConfig {
   if (cache) return cache;
   const { contentRoot } = loadConfig();
-  const path = resolve(contentRoot, 'site.yaml');
-  let text: string;
-  try {
-    text = readFileSync(path, 'utf8');
-  } catch (err: unknown) {
-    if ((err as { code?: string }).code === 'ENOENT') {
-      throw new Error(
-        `Missing ${path}. Create it from .site.example.yaml in this repo ` +
-        `and fill in site_url, assets_base_url, and name.`,
-      );
-    }
-    throw err;
+  const sitePath = resolve(contentRoot, 'site.yaml');
+  const baseRaw = tryReadYaml(sitePath);
+  if (!baseRaw) {
+    throw new Error(
+      `Missing ${sitePath}. Create it from .site.example.yaml in this repo ` +
+      `and fill in site_url and name.`,
+    );
   }
-  const raw = (yaml.load(text) ?? {}) as Record<string, unknown>;
+
+  const profile = (typeof process !== 'undefined' && process.env?.PROFILE) || undefined;
+  let raw: Record<string, unknown> = baseRaw;
+  if (profile) {
+    const profilePath = resolve(contentRoot, `site.${profile}.yaml`);
+    const profileRaw = tryReadYaml(profilePath);
+    if (!profileRaw && !PROFILE_DEFAULTS[profile]) {
+      throw new Error(`PROFILE=${profile} but ${profilePath} not found, and no built-in defaults for that profile.`);
+    }
+    raw = mergeProfile(raw, PROFILE_DEFAULTS[profile] ?? null);
+    raw = mergeProfile(raw, profileRaw ?? null);
+  }
+
   for (const k of REQUIRED) {
     if (typeof raw[k] !== 'string' || !raw[k]) {
-      throw new Error(`${path}: \`${k}\` is required (string)`);
+      throw new Error(`${sitePath}: \`${k}\` is required (string)`);
     }
   }
   const homepage = (raw.homepage as Record<string, string> | undefined) ?? {};
