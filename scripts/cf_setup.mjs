@@ -149,9 +149,8 @@ async function main() {
   console.log('\nNext steps:');
   console.log('  1. npm run build         # generate dist/');
   console.log('  2. npm run publish       # upload to R2 + deploy to Pages');
-  console.log('  3. Attach a custom domain to the Pages project once deployed:');
-  console.log('       npx wrangler pages deployment domain add \\');
-  console.log(`         --project-name=${project} ${process.env.CF_PAGES_SHADOW_HOSTNAME || 'sgallery.prenticew.com'}`);
+  console.log('  3. Attach shadow custom domain — see README "Custom domain" section.');
+  console.log(`     (target: ${process.env.CF_PAGES_SHADOW_HOSTNAME || 'sgallery.prenticew.com'})`);
 }
 
 main().catch((err) => {

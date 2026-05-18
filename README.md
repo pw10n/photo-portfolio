@@ -148,12 +148,23 @@ Initial deploy uploads everything (~14k originals + ~210k derivatives) and takes
 
 ### Custom domain (after first deploy)
 
-The first `wrangler pages deploy` creates a `*.pages.dev` URL. Attach the shadow hostname when ready to start parity-testing:
+The first `wrangler pages deploy` creates a `*.pages.dev` URL. Wrangler 3.x has no `pages` subcommand for attaching a custom domain, so use the Cloudflare REST API (which `cf_setup.mjs`-style tokens already have permission for):
 
 ```bash
-npx wrangler pages deployment domain add \
-  --project-name=photo-portfolio sgallery.prenticew.com
+node --env-file=.env -e "
+const acct = process.env.CLOUDFLARE_ACCOUNT_ID;
+const proj = process.env.CF_PAGES_PROJECT;
+const host = process.env.CF_PAGES_SHADOW_HOSTNAME || 'sgallery.prenticew.com';
+const r = await fetch(
+  'https://api.cloudflare.com/client/v4/accounts/' + acct + '/pages/projects/' + proj + '/domains',
+  { method: 'POST',
+    headers: { Authorization: 'Bearer ' + process.env.CLOUDFLARE_API_TOKEN, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: host }) });
+console.log(r.status, await r.text());
+"
 ```
+
+CF auto-creates the DNS record on the zone and provisions a cert (1–3 min). Or use the dashboard: Workers & Pages → photo-portfolio → Custom domains → Set up a custom domain.
 
 Cut over to `gallery.prenticew.com` only after shadow parity is satisfactory (plan §9).
 
