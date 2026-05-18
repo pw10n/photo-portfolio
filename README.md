@@ -99,6 +99,66 @@ To switch to your real content repo later, just change `content_root` in `.confi
 
 ---
 
+## Deploy to Cloudflare
+
+The site deploys to **Cloudflare Pages** (HTML/CSS/JS) with images on **Cloudflare R2** (`assets.prenticew.com`). One-time setup, then `npm run deploy` is incremental — only changed images upload to R2.
+
+### First-time setup
+
+Wrangler and the upload script can't create their own credentials. There are exactly two manual dashboard steps; the rest is CLI.
+
+**Step 1 — Cloudflare API token** (lets `wrangler` create the R2 bucket + Pages project + DNS records).
+
+Dashboard → **My Profile → API Tokens → Create Token → Custom token**. Permissions:
+- `Account → Cloudflare Pages → Edit`
+- `Account → Workers R2 Storage → Edit`
+- `Zone → DNS → Edit` (scope: `prenticew.com`)
+
+```bash
+cp .env.example .env
+$EDITOR .env    # paste CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID (from dashboard sidebar)
+```
+
+**Step 2 — Provision R2 + Pages** (idempotent; safe to re-run):
+
+```bash
+npm install                # picks up @aws-sdk/client-s3 and wrangler
+npm run cf:setup           # creates R2 bucket, attaches assets.prenticew.com, creates Pages project
+```
+
+**Step 3 — R2 S3 access keys** (lets `publish.mjs` PUT images into the bucket).
+
+Dashboard → **R2 → Manage R2 API Tokens → Create API token**.
+Permission: **Object Read & Write**, scoped to the `photo-portfolio` bucket (now exists thanks to step 2).
+
+```bash
+$EDITOR .env    # paste AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY
+```
+
+### Deploy
+
+```bash
+npm run deploy             # = npm run build && npm run publish
+```
+
+- `build` runs the local pipeline (ingest → encode derivatives → astro build → verify).
+- `publish` walks `build/derivatives/` and the originals referenced by each album, sha256s each file, **skips anything already in `build/upload-cache.json`**, uploads the rest to R2, then runs `wrangler pages deploy dist/`.
+
+Initial deploy uploads everything (~14k originals + ~210k derivatives) and takes 1–2 hours depending on uplink. Subsequent deploys, after adding a new album, only upload that album's images — typically seconds to minutes.
+
+### Custom domain (after first deploy)
+
+The first `wrangler pages deploy` creates a `*.pages.dev` URL. Attach the shadow hostname when ready to start parity-testing:
+
+```bash
+npx wrangler pages deployment domain add \
+  --project-name=photo-portfolio sgallery.prenticew.com
+```
+
+Cut over to `gallery.prenticew.com` only after shadow parity is satisfactory (plan §9).
+
+---
+
 ## Content repo layout
 
 `content_root` is the **portfolio parent directory**, which has two subdirectories: `content/` (canonical source of truth — edit YAML, drop in photos, rebuild) and `build/` (auto-created, holds derivatives + caches; safe to delete to force a full re-encode).
@@ -163,10 +223,10 @@ You **don't** write:
 ### 3. Build and publish
 
 ```bash
-npm run build      # `npm run deploy` will replace this once publish.mjs lands
+npm run deploy     # build + upload changed images to R2 + deploy Pages
 ```
 
-This runs the local build chain: ingest YAML → encode derivatives → render site → verify invariants. Once `publish.mjs` lands, `npm run deploy` will also sync R2 + deploy Pages.
+This runs the full chain: ingest YAML → encode derivatives → render site → verify invariants → delta-upload to R2 (only changed/new images) → `wrangler pages deploy`. Use `npm run build` alone if you want to render the site without publishing.
 
 After the build, open `meta.yaml` again and you'll see a new line:
 
