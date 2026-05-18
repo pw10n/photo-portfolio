@@ -16,6 +16,10 @@ import sharp from 'sharp';
 import exifr from 'exifr';
 import { loadConfig } from './_config.mjs';
 
+// One libvips thread per sharp call. We run N workers in parallel below,
+// so total threads = N (not N × cores). Massively reduces context-switching.
+sharp.concurrency(1);
+
 const REPO_ROOT = resolve(import.meta.dirname, '..');
 const ALBUMS_DIR = resolve(REPO_ROOT, 'src', 'content', 'albums');
 
@@ -23,7 +27,11 @@ const WIDTHS = [480, 960, 1600, 2400];
 const FORMATS = ['avif', 'webp', 'jpg'];
 const QUALITY = { avif: 50, webp: 75, jpg: 82 };
 const THUMB_SIZE = 200;
-const CONCURRENCY = Math.max(1, cpus().length);
+
+// Default: cap at 8 (most Macs have <= 8 perf cores; diminishing returns above).
+// Override with CONCURRENCY env var for bigger boxes.
+const DEFAULT_CONCURRENCY = Math.max(1, Math.min(8, cpus().length));
+const CONCURRENCY = Math.max(1, Number(process.env.CONCURRENCY) || DEFAULT_CONCURRENCY);
 
 async function readJson(path, fallback) {
   try {
@@ -103,22 +111,38 @@ async function encodeOne({ srcPath, imageId, applicableWidths, intrinsicWidth, d
 
   const sourceBuf = await readFile(srcPath);
 
+  // Decode + EXIF-rotate once. Downstream resizes work from the raw buffer
+  // without re-decoding the JPEG for every width/format combination.
+  const sourceRaw = await sharp(sourceBuf, { failOn: 'none' })
+    .rotate()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  const sourceRawOpts = { raw: { width: sourceRaw.info.width, height: sourceRaw.info.height, channels: sourceRaw.info.channels } };
+
+  // Per width: resize once, then encode 3 formats from that intermediate.
   for (const w of applicableWidths) {
+    const resized = await sharp(sourceRaw.data, sourceRawOpts)
+      .resize({ width: w, withoutEnlargement: true })
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    const resizedOpts = { raw: { width: resized.info.width, height: resized.info.height, channels: resized.info.channels } };
+
     for (const fmt of FORMATS) {
       const outPath = resolve(outDir, `${w}.${fmt}`);
-      const pipeline = sharp(sourceBuf, { failOn: 'none' })
-        .rotate()
-        .resize({ width: w, withoutEnlargement: true });
-      await encoderFor(fmt)(pipeline).toFile(outPath);
+      await encoderFor(fmt)(sharp(resized.data, resizedOpts)).toFile(outPath);
     }
   }
 
+  // Thumbnail: square cover with attention-based crop, then 3 formats.
+  const thumbResized = await sharp(sourceRaw.data, sourceRawOpts)
+    .resize({ width: THUMB_SIZE, height: THUMB_SIZE, fit: 'cover', position: 'attention' })
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  const thumbOpts = { raw: { width: thumbResized.info.width, height: thumbResized.info.height, channels: thumbResized.info.channels } };
+
   for (const fmt of FORMATS) {
     const outPath = resolve(outDir, `thumb.${fmt}`);
-    const pipeline = sharp(sourceBuf, { failOn: 'none' })
-      .rotate()
-      .resize({ width: THUMB_SIZE, height: THUMB_SIZE, fit: 'cover', position: 'attention' });
-    await encoderFor(fmt)(pipeline).toFile(outPath);
+    await encoderFor(fmt)(sharp(thumbResized.data, thumbOpts)).toFile(outPath);
   }
 }
 
@@ -271,7 +295,7 @@ async function main() {
     return;
   }
 
-  console.log(`process_images: ${jobs.length} images, concurrency=${CONCURRENCY}`);
+  console.log(`process_images: ${jobs.length} images, concurrency=${CONCURRENCY} (cpus=${cpus().length}, sharp.concurrency=1)`);
   console.log(`  build_dir: ${buildDir}`);
   const cache = await readJson(cachePath, {});
   const results = {};
