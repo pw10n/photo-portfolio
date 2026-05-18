@@ -1,5 +1,6 @@
 ---
 import '../styles/global.css';
+import { loadSite } from '../lib/site';
 
 interface Props {
   title: string;
@@ -9,8 +10,12 @@ interface Props {
 }
 
 const { title, description, ogImage, noindex } = Astro.props;
-const siteName = 'Prentice Wongvibulsin Photography';
-const fullTitle = title === siteName ? title : `${title} — ${siteName}`;
+const site = loadSite();
+const fullTitle = title === site.name ? title : `${title} — ${site.name}`;
+const year = new Date().getFullYear();
+const copyrightLine = site.copyright_holder
+  ? `© ${year} ${site.copyright_holder}`
+  : `© ${year}`;
 ---
 
 <!doctype html>
@@ -21,7 +26,7 @@ const fullTitle = title === siteName ? title : `${title} — ${siteName}`;
     <title>{fullTitle}</title>
     {description && <meta name="description" content={description} />}
     {noindex && <meta name="robots" content="noindex" />}
-    <meta property="og:site_name" content={siteName} />
+    <meta property="og:site_name" content={site.name} />
     <meta property="og:title" content={fullTitle} />
     {description && <meta property="og:description" content={description} />}
     {ogImage && <meta property="og:image" content={ogImage} />}
@@ -30,16 +35,14 @@ const fullTitle = title === siteName ? title : `${title} — ${siteName}`;
   <body>
     <header class="site-header">
       <div class="container">
-        <h1><a href="/">{siteName}</a></h1>
+        <h1><a href="/">{site.name}</a></h1>
       </div>
     </header>
     <main class="container">
       <slot />
     </main>
     <footer class="site-footer">
-      <div class="container">
-        &copy; {new Date().getFullYear()} Prentice Wongvibulsin
-      </div>
+      <div class="container">{copyrightLine}</div>
     </footer>
   </body>
 </html>

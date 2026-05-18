@@ -17,6 +17,25 @@ const IMAGE_ID_RE = /^[a-z2-7]{11}$/;
 const ALBUM_ID_RE = /^alb_[A-Za-z0-9]+$/;
 const HEX64_RE = /^[a-f0-9]{64}$/;
 const SAMPLE_DERIV_COUNT = 20;
+const ASSET_COVERAGE_CONCURRENCY = 32;
+
+function fmtDuration(ms) {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const ss = (s % 60).toString().padStart(2, '0');
+  if (m < 60) return `${m}m${ss}s`;
+  const h = Math.floor(m / 60);
+  const mm = (m % 60).toString().padStart(2, '0');
+  return `${h}h${mm}m${ss}s`;
+}
+
+function etaString(done, total, startMs) {
+  if (done === 0) return '–';
+  const elapsed = Date.now() - startMs;
+  const remaining = (elapsed / done) * (total - done);
+  return fmtDuration(remaining);
+}
 
 async function readJson(path, fallback) {
   try {
@@ -98,28 +117,57 @@ async function checkFolderCoverage(folders) {
 
 async function checkAssetCoverage(albums, imageMeta, derivDir) {
   const failures = [];
+  const jobs = [];
   for (const a of albums) {
     for (const img of a.images) {
-      const meta = imageMeta[img.image_id];
-      if (!meta) {
-        failures.push(`image ${img.image_id} (${a.url_path}/${img.filename}) missing from image-meta.json`);
-        continue;
-      }
-      const widths = meta.widths ?? [];
-      if (widths.length === 0) {
-        failures.push(`image ${img.image_id} has no derivative widths`);
-        continue;
-      }
-      const targetWidth = widths.includes(960) ? 960 : Math.max(...widths);
-      const formats = meta.formats ?? [];
-      const present = await Promise.all(
-        formats.map((fmt) => pathExists(resolve(derivDir, img.image_id, `${targetWidth}.${fmt}`))),
-      );
-      if (!present.some(Boolean)) {
-        failures.push(`image ${img.image_id} has no derivative at width ${targetWidth} in any format`);
+      jobs.push({ album: a, img });
+    }
+  }
+
+  const start = Date.now();
+  let done = 0;
+  let lastPrint = 0;
+
+  async function checkOne({ album, img }) {
+    const meta = imageMeta[img.image_id];
+    if (!meta) {
+      failures.push(`image ${img.image_id} (${album.url_path}/${img.filename}) missing from image-meta.json`);
+      return;
+    }
+    const widths = meta.widths ?? [];
+    if (widths.length === 0) {
+      failures.push(`image ${img.image_id} has no derivative widths`);
+      return;
+    }
+    const targetWidth = widths.includes(960) ? 960 : Math.max(...widths);
+    const formats = meta.formats ?? [];
+    const present = await Promise.all(
+      formats.map((fmt) => pathExists(resolve(derivDir, img.image_id, `${targetWidth}.${fmt}`))),
+    );
+    if (!present.some(Boolean)) {
+      failures.push(`image ${img.image_id} has no derivative at width ${targetWidth} in any format`);
+    }
+  }
+
+  const queue = [...jobs];
+  async function worker() {
+    while (queue.length > 0) {
+      const job = queue.shift();
+      await checkOne(job);
+      done += 1;
+      if (Date.now() - lastPrint > 1000 || done === jobs.length) {
+        const elapsed = fmtDuration(Date.now() - start);
+        const eta = etaString(done, jobs.length, start);
+        process.stdout.write(
+          `\r  · asset coverage: ${done}/${jobs.length} · ${elapsed} elapsed · ${eta} eta   `,
+        );
+        lastPrint = Date.now();
       }
     }
   }
+  await Promise.all(Array.from({ length: ASSET_COVERAGE_CONCURRENCY }, () => worker()));
+  process.stdout.write('\r' + ' '.repeat(80) + '\r');
+
   return { name: 'asset coverage', failures };
 }
 
@@ -297,6 +345,9 @@ async function checkNamespaceNonOverlap(albums, legacyKeys) {
 async function main() {
   const { contentDir, buildDir } = await loadConfig();
   const derivDir = resolve(buildDir, 'derivatives');
+
+  console.log('verify: loading inputs');
+  const inputsStart = Date.now();
   const [albums, folders, imageMeta, legacyKeys, plaintexts] = await Promise.all([
     loadAlbums(),
     loadFolders(),
@@ -304,32 +355,41 @@ async function main() {
     readJson(resolve(buildDir, 'legacy-keys.json'), {}),
     collectPlaintextPasswords(contentDir),
   ]);
+  console.log(`  ✓ inputs loaded (${fmtDuration(Date.now() - inputsStart)})`);
 
-  const results = await Promise.all([
-    checkAlbumCoverage(albums),
-    checkFolderCoverage(folders),
-    checkAssetCoverage(albums, imageMeta, derivDir),
-    checkSitemapPurity(),
-    checkPasswordsAndLeaks(albums, plaintexts),
-    checkRedirects(),
-    checkNoUpscale(imageMeta, derivDir),
-    checkLegacyKeys(albums, legacyKeys),
-    checkAlbumIds(albums),
-    checkNamespaceNonOverlap(albums, legacyKeys),
-  ]);
-
-  let failed = 0;
-  for (const r of results) {
-    if (r.failures.length === 0) {
-      console.log(`  ✓ ${r.name}`);
-    } else {
-      failed += 1;
-      console.log(`  ✗ ${r.name} (${r.failures.length})`);
-      for (const f of r.failures.slice(0, 10)) console.log(`      - ${f}`);
-      if (r.failures.length > 10) console.log(`      … +${r.failures.length - 10} more`);
-    }
+  // Wrap each check so it logs as soon as it completes (rather than waiting
+  // for the whole Promise.all batch to settle). Slow checks show up later in
+  // the output, making it obvious which are the bottlenecks.
+  function timed(name, fn) {
+    const taskStart = Date.now();
+    return fn().then((r) => {
+      const secs = fmtDuration(Date.now() - taskStart);
+      if (r.failures.length === 0) {
+        console.log(`  ✓ ${r.name || name} (${secs})`);
+      } else {
+        console.log(`  ✗ ${r.name || name} (${r.failures.length} failures, ${secs})`);
+        for (const f of r.failures.slice(0, 10)) console.log(`      - ${f}`);
+        if (r.failures.length > 10) console.log(`      … +${r.failures.length - 10} more`);
+      }
+      return r;
+    });
   }
 
+  console.log('\nverify: running checks');
+  const results = await Promise.all([
+    timed('album HTML coverage', () => checkAlbumCoverage(albums)),
+    timed('folder HTML coverage', () => checkFolderCoverage(folders)),
+    timed('asset coverage', () => checkAssetCoverage(albums, imageMeta, derivDir)),
+    timed('sitemap & feed purity', () => checkSitemapPurity()),
+    timed('password hashes & no-plaintext-leak', () => checkPasswordsAndLeaks(albums, plaintexts)),
+    timed('_redirects present', () => checkRedirects()),
+    timed('no upscaled derivatives', () => checkNoUpscale(imageMeta, derivDir)),
+    timed('legacy-keys coverage', () => checkLegacyKeys(albums, legacyKeys)),
+    timed('album id present & unique', () => checkAlbumIds(albums)),
+    timed('native id ⊥ legacy key namespace', () => checkNamespaceNonOverlap(albums, legacyKeys)),
+  ]);
+
+  const failed = results.filter((r) => r.failures.length > 0).length;
   if (failed > 0) {
     console.error(`\nverify: ${failed} of ${results.length} checks failed`);
     process.exit(1);

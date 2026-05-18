@@ -60,11 +60,16 @@ git clone <repo-url> photo-portfolio
 cd photo-portfolio
 npm install
 
+# Point at your portfolio directory
 cp .config.example.yaml .config.yaml
 $EDITOR .config.yaml      # set content_root: <absolute path>
+
+# Create site-wide config under content_root (site_url, name, etc.)
+cp .site.example.yaml "$(yq .content_root .config.yaml | tr -d '"')/site.yaml"
+$EDITOR "$(yq .content_root .config.yaml | tr -d '"')/site.yaml"
 ```
 
-`.config.yaml` and `.env` are gitignored. Never commit them.
+`.config.yaml` and `.env` are gitignored. `<content_root>/site.yaml` lives outside the repo so the tooling is reusable across portfolios — never commit it to this repo either.
 
 ---
 
@@ -73,30 +78,84 @@ $EDITOR .config.yaml      # set content_root: <absolute path>
 The fastest way to see the site work end-to-end against fake but real photos:
 
 ```bash
-# 1. Generate procedural test JPEGs into ./test-content/
+# 1. Generate procedural test JPEGs + site.yaml into ./test-content/
 node scripts/seed_test_content.mjs
 
 # 2. Point .config.yaml at the fixture
 echo "content_root: $(pwd)/test-content" > .config.yaml
 
-# 3. Local-mode assets: relative URLs + symlink derivatives into public/
-echo "PUBLIC_ASSETS_BASE_URL=/" > .env
-ln -sfn ../test-content/build/derivatives public/derivatives
-# (For a non-test content_root, use the absolute path:
-#   ln -sfn /mnt/nfs-share/Portfolio/build/derivatives public/derivatives)
-
-# 4. Build the full chain (yaml → JSON → derivatives → astro build → verify)
-npm run build
-
-# 5. Either serve the built site:
-npx astro preview                # http://localhost:4321
-# …or run the live dev server with HMR:
-npm run dev                      # http://localhost:4321
+# 3. Build + serve. `npm run dev` and `npm run build:local` auto-create the
+#    public/derivatives symlink and load <content_root>/site.local.yaml
+#    (or apply built-in localhost defaults if it's absent).
+npm run dev                      # http://localhost:4321 with HMR
+# …or for a static preview:
+npm run build:local
+npm run preview                  # http://localhost:4321
 ```
 
 After this, edit any photo, `meta.yaml`, or component and re-run `npm run build` (or rely on HMR for component edits). Drop your own JPEGs into `test-content/Sample/Sunset-Hike/` and they'll be auto-discovered.
 
 To switch to your real content repo later, just change `content_root` in `.config.yaml` — same scripts, same commands.
+
+---
+
+## Deploy to Cloudflare
+
+The site deploys to **Cloudflare Pages** (HTML/CSS/JS) with images on **Cloudflare R2** (`assets.prenticew.com`). One-time setup, then `npm run deploy` is incremental — only changed images upload to R2.
+
+### First-time setup
+
+Wrangler and the upload script can't create their own credentials. There are exactly two manual dashboard steps; the rest is CLI.
+
+**Step 1 — Cloudflare API token** (lets `wrangler` create the R2 bucket + Pages project + DNS records).
+
+Dashboard → **My Profile → API Tokens → Create Token → Custom token**. Permissions:
+- `Account → Cloudflare Pages → Edit`
+- `Account → Workers R2 Storage → Edit`
+- `Zone → DNS → Edit` (scope: `prenticew.com`)
+
+```bash
+cp .env.example .env
+$EDITOR .env    # paste CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID (from dashboard sidebar)
+```
+
+**Step 2 — Provision R2 + Pages** (idempotent; safe to re-run):
+
+```bash
+npm install                # picks up @aws-sdk/client-s3 and wrangler
+npm run cf:setup           # creates R2 bucket, attaches assets.prenticew.com, creates Pages project
+```
+
+**Step 3 — R2 S3 access keys** (lets `publish.mjs` PUT images into the bucket).
+
+Dashboard → **R2 → Manage R2 API Tokens → Create API token**.
+Permission: **Object Read & Write**, scoped to the `photo-portfolio` bucket (now exists thanks to step 2).
+
+```bash
+$EDITOR .env    # paste AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY
+```
+
+### Deploy
+
+```bash
+npm run deploy             # = npm run build && npm run publish
+```
+
+- `build` runs the local pipeline (ingest → encode derivatives → astro build → verify).
+- `publish` walks `build/derivatives/` and the originals referenced by each album, sha256s each file, **skips anything already in `build/upload-cache.json`**, uploads the rest to R2, then runs `wrangler pages deploy dist/`.
+
+Initial deploy uploads everything (~14k originals + ~210k derivatives) and takes 1–2 hours depending on uplink. Subsequent deploys, after adding a new album, only upload that album's images — typically seconds to minutes.
+
+### Custom domain (after first deploy)
+
+The first `wrangler pages deploy` creates a `*.pages.dev` URL. Attach the shadow hostname when ready to start parity-testing:
+
+```bash
+npx wrangler pages deployment domain add \
+  --project-name=photo-portfolio sgallery.prenticew.com
+```
+
+Cut over to `gallery.prenticew.com` only after shadow parity is satisfactory (plan §9).
 
 ---
 
@@ -106,6 +165,7 @@ To switch to your real content repo later, just change `content_root` in `.confi
 
 ```
 <content_root>/
+├── site.yaml                      # site-wide config (site_url, name, etc.)
 ├── content/
 │   ├── .legacy-keys.json          # auto-maintained; preserves legacy-site deep links
 │   ├── Travel/
@@ -163,10 +223,10 @@ You **don't** write:
 ### 3. Build and publish
 
 ```bash
-npm run build      # `npm run deploy` will replace this once publish.mjs lands
+npm run deploy     # build + upload changed images to R2 + deploy Pages
 ```
 
-This runs the local build chain: ingest YAML → encode derivatives → render site → verify invariants. Once `publish.mjs` lands, `npm run deploy` will also sync R2 + deploy Pages.
+This runs the full chain: ingest YAML → encode derivatives → render site → verify invariants → delta-upload to R2 (only changed/new images) → `wrangler pages deploy`. Use `npm run build` alone if you want to render the site without publishing.
 
 After the build, open `meta.yaml` again and you'll see a new line:
 
@@ -307,8 +367,11 @@ sort: date                      # filename | date | manual
 
 | Command | What it does | Status |
 |---|---|---|
-| `npm run build` | `yaml_to_content` → `process_images` → `astro build` → `verify` (10 invariants) | ✓ works |
-| `npm run dev` | Astro dev server with HMR (requires content already built) | ✓ works |
+| `npm run build` | Production: `yaml_to_content` → `process_images` → `astro build` → `verify`. Uses bare `site.yaml`. | ✓ works |
+| `npm run build:local` | Same chain but with `PROFILE=local` (localhost URLs, public/derivatives symlink). | ✓ works |
+| `npm run dev` | Auto-sets up symlinks + runs Astro dev server with HMR on `PROFILE=local`. | ✓ works |
+| `npm run preview` | Serves the last-built `dist/`. | ✓ works |
+| `npm run setup:local` | Idempotent: creates the `public/derivatives` symlink and a `site.local.yaml` stub if absent. | ✓ works |
 | `npm run publish` | Sync R2 deltas → `wrangler pages deploy dist/` | ⏳ not yet implemented |
 | `npm run deploy` | `build` then `publish` | ⏳ blocked on `publish` |
 

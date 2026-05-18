@@ -156,17 +156,28 @@ async function buildAlbumJson({ dir, meta, urlPath, parentPath, albumsOutDir }) 
   const overrides = (data.images && typeof data.images === 'object') ? data.images : {};
   const orderedFilenames = applySort(imageFiles, sortMode, overrides);
 
-  const images = [];
-  for (const filename of orderedFilenames) {
-    const override = overrides[filename];
-    const { caption, keywords } = await resolveImageCaptionKeywords(resolve(dir, filename), override);
-    images.push({
-      image_id: imageIdFor(id, filename),
-      filename,
-      caption,
-      keywords,
-    });
+  // Resolve per-image caption/keywords in parallel — each call reads a small
+  // window of the JPEG header for IPTC/XMP, and NFS round-trip dominates
+  // when sources live on a network share. Cap concurrency to be polite.
+  const PER_ALBUM_CONCURRENCY = 16;
+  const images = new Array(orderedFilenames.length);
+  let next = 0;
+  async function worker() {
+    while (true) {
+      const i = next++;
+      if (i >= orderedFilenames.length) return;
+      const filename = orderedFilenames[i];
+      const override = overrides[filename];
+      const { caption, keywords } = await resolveImageCaptionKeywords(resolve(dir, filename), override);
+      images[i] = {
+        image_id: imageIdFor(id, filename),
+        filename,
+        caption,
+        keywords,
+      };
+    }
   }
+  await Promise.all(Array.from({ length: Math.min(PER_ALBUM_CONCURRENCY, orderedFilenames.length) }, worker));
 
   let passwordHash = null;
   let passwordSalt = null;
@@ -302,6 +313,9 @@ async function main() {
   let albumCount = 0;
   let folderCount = 0;
 
+  const totalAlbums = dirRecords.filter((r) => r.kind === 'album').length;
+  let imageCountTotal = 0;
+
   for (const r of dirRecords) {
     if (r.kind === 'album') {
       const json = await buildAlbumJson({
@@ -315,6 +329,10 @@ async function main() {
       const slug = slugFor(urlName, r.urlPath, albumSlugs);
       await writeFile(resolve(albumsOutDir, `${slug}.json`), JSON.stringify(json, null, 2));
       albumCount += 1;
+      imageCountTotal += json.images.length;
+      if (albumCount % 10 === 0 || albumCount === totalAlbums) {
+        process.stdout.write(`\r  albums ${albumCount}/${totalAlbums} (${imageCountTotal} images so far)`);
+      }
     } else {
       const data = r.meta.data;
       const json = {
@@ -333,9 +351,10 @@ async function main() {
     }
   }
 
+  if (totalAlbums > 0) process.stdout.write('\n');
   const hasLegacy = await mirrorLegacyKeys(contentDir, buildDir);
 
-  console.log(`yaml_to_content: ${folderCount} folders, ${albumCount} albums`);
+  console.log(`yaml_to_content: ${folderCount} folders, ${albumCount} albums, ${imageCountTotal} images`);
   console.log(`  legacy-keys: ${hasLegacy ? 'mirrored' : 'absent (wrote empty stub)'}`);
 }
 

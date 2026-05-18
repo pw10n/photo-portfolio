@@ -34,11 +34,6 @@ function heroImageIdFor(album: Album): string | null {
 }
 ---
 
-<section class="hero">
-  <h1>Photography</h1>
-  <p>A selection of recent work.</p>
-</section>
-
 {
   sortedAlbums.length > 0 && (
     <section class="home-section">
@@ -91,20 +86,6 @@ function heroImageIdFor(album: Album): string | null {
 )}
 
 <style>
-  .hero {
-    padding: 2rem 0 3rem;
-  }
-  .hero h1 {
-    font-family: var(--font-serif);
-    font-size: clamp(2rem, 5vw, 3rem);
-    font-weight: 400;
-    margin: 0 0 0.5rem;
-  }
-  .hero p {
-    color: var(--muted);
-    font-size: 1.125rem;
-    margin: 0;
-  }
   .home-section {
     margin-bottom: 3rem;
   }

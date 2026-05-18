@@ -12,10 +12,13 @@ import { createReadStream } from 'node:fs';
 import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { cpus } from 'node:os';
 import { resolve } from 'node:path';
-import { pipeline } from 'node:stream/promises';
 import sharp from 'sharp';
 import exifr from 'exifr';
 import { loadConfig } from './_config.mjs';
+
+// One libvips thread per sharp call. We run N workers in parallel below,
+// so total threads = N (not N × cores). Massively reduces context-switching.
+sharp.concurrency(1);
 
 const REPO_ROOT = resolve(import.meta.dirname, '..');
 const ALBUMS_DIR = resolve(REPO_ROOT, 'src', 'content', 'albums');
@@ -24,7 +27,12 @@ const WIDTHS = [480, 960, 1600, 2400];
 const FORMATS = ['avif', 'webp', 'jpg'];
 const QUALITY = { avif: 50, webp: 75, jpg: 82 };
 const THUMB_SIZE = 200;
-const CONCURRENCY = Math.max(1, cpus().length);
+
+// Default: cap at 4 (server has <= 4 cores; diminishing returns above on the
+// machines we actually deploy on). Override with CONCURRENCY env var for
+// bigger boxes — e.g. CONCURRENCY=8 on an Apple Silicon Mac.
+const DEFAULT_CONCURRENCY = Math.max(1, Math.min(4, cpus().length));
+const CONCURRENCY = Math.max(1, Number(process.env.CONCURRENCY) || DEFAULT_CONCURRENCY);
 
 async function readJson(path, fallback) {
   try {
@@ -37,12 +45,9 @@ async function readJson(path, fallback) {
 
 async function hashFile(path) {
   const h = createHash('sha256');
-  await pipeline(createReadStream(path), async function* (source) {
-    for await (const chunk of source) {
-      h.update(chunk);
-      yield chunk;
-    }
-  });
+  for await (const chunk of createReadStream(path)) {
+    h.update(chunk);
+  }
   return h.digest('hex');
 }
 
@@ -107,22 +112,38 @@ async function encodeOne({ srcPath, imageId, applicableWidths, intrinsicWidth, d
 
   const sourceBuf = await readFile(srcPath);
 
+  // Decode + EXIF-rotate once. Downstream resizes work from the raw buffer
+  // without re-decoding the JPEG for every width/format combination.
+  const sourceRaw = await sharp(sourceBuf, { failOn: 'none' })
+    .rotate()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  const sourceRawOpts = { raw: { width: sourceRaw.info.width, height: sourceRaw.info.height, channels: sourceRaw.info.channels } };
+
+  // Per width: resize once, then encode 3 formats from that intermediate.
   for (const w of applicableWidths) {
+    const resized = await sharp(sourceRaw.data, sourceRawOpts)
+      .resize({ width: w, withoutEnlargement: true })
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    const resizedOpts = { raw: { width: resized.info.width, height: resized.info.height, channels: resized.info.channels } };
+
     for (const fmt of FORMATS) {
       const outPath = resolve(outDir, `${w}.${fmt}`);
-      const pipeline = sharp(sourceBuf, { failOn: 'none' })
-        .rotate()
-        .resize({ width: w, withoutEnlargement: true });
-      await encoderFor(fmt)(pipeline).toFile(outPath);
+      await encoderFor(fmt)(sharp(resized.data, resizedOpts)).toFile(outPath);
     }
   }
 
+  // Thumbnail: square cover with attention-based crop, then 3 formats.
+  const thumbResized = await sharp(sourceRaw.data, sourceRawOpts)
+    .resize({ width: THUMB_SIZE, height: THUMB_SIZE, fit: 'cover', position: 'attention' })
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  const thumbOpts = { raw: { width: thumbResized.info.width, height: thumbResized.info.height, channels: thumbResized.info.channels } };
+
   for (const fmt of FORMATS) {
     const outPath = resolve(outDir, `thumb.${fmt}`);
-    const pipeline = sharp(sourceBuf, { failOn: 'none' })
-      .rotate()
-      .resize({ width: THUMB_SIZE, height: THUMB_SIZE, fit: 'cover', position: 'attention' });
-    await encoderFor(fmt)(pipeline).toFile(outPath);
+    await encoderFor(fmt)(sharp(thumbResized.data, thumbOpts)).toFile(outPath);
   }
 }
 
@@ -140,36 +161,47 @@ async function readMetadata(srcPath) {
 
 async function processImage({ src, imageId }, ctx) {
   const { cache, results, derivDir } = ctx;
-  const srcStat = await stat(src).catch(() => null);
-  if (!srcStat) {
-    return { status: 'missing', imageId, src };
-  }
-  const { meta, exif } = await readMetadata(src);
-  const intrinsicWidth = meta.width ?? 0;
-  const intrinsicHeight = meta.height ?? 0;
-  const applicableWidths = WIDTHS.filter((w) => w <= intrinsicWidth);
-  if (applicableWidths.length === 0 && intrinsicWidth > 0) {
-    applicableWidths.push(intrinsicWidth);
-  }
-  const outputs = expectedOutputs(derivDir, imageId, applicableWidths);
+  try {
+    log('processImage start ' + imageId);
+    const srcStat = await stat(src).catch(() => null);
+    if (!srcStat) {
+      log('processImage missing ' + imageId);
+      return { status: 'missing', imageId, src };
+    }
+    log('processImage stat ok ' + imageId);
+    const { meta, exif } = await readMetadata(src);
+    log('processImage meta ' + imageId + ' ' + meta.width + 'x' + meta.height);
+    const intrinsicWidth = meta.width ?? 0;
+    const intrinsicHeight = meta.height ?? 0;
+    const applicableWidths = WIDTHS.filter((w) => w <= intrinsicWidth);
+    if (applicableWidths.length === 0 && intrinsicWidth > 0) {
+      applicableWidths.push(intrinsicWidth);
+    }
+    const outputs = expectedOutputs(derivDir, imageId, applicableWidths);
 
-  const hash = await hashFile(src);
-  const cached = cache[imageId];
-  const cacheHit = cached?.hash === hash && (await allExist(outputs));
+    const hash = await hashFile(src);
+    log('processImage hash ' + imageId);
+    const cached = cache[imageId];
+    const cacheHit = cached?.hash === hash && (await allExist(outputs));
+    log('processImage cacheHit=' + cacheHit + ' ' + imageId);
 
-  if (!cacheHit) {
-    await encodeOne({ srcPath: src, imageId, applicableWidths, intrinsicWidth, derivDir });
+    if (!cacheHit) {
+      await encodeOne({ srcPath: src, imageId, applicableWidths, intrinsicWidth, derivDir });
+      log('processImage encoded ' + imageId);
+    }
+
+    results[imageId] = {
+      width: intrinsicWidth,
+      height: intrinsicHeight,
+      formats: FORMATS,
+      widths: applicableWidths,
+      exif: projectExif(exif),
+    };
+    cache[imageId] = { hash };
+    return { status: cacheHit ? 'cached' : 'encoded', imageId };
+  } catch (err) {
+    return { status: 'errored', imageId, src, error: err?.message || String(err) };
   }
-
-  results[imageId] = {
-    width: intrinsicWidth,
-    height: intrinsicHeight,
-    formats: FORMATS,
-    widths: applicableWidths,
-    exif: projectExif(exif),
-  };
-  cache[imageId] = { hash };
-  return { status: cacheHit ? 'cached' : 'encoded', imageId };
 }
 
 async function collectJobs(contentDir) {
@@ -188,40 +220,91 @@ async function collectJobs(contentDir) {
   return jobs;
 }
 
+const DEBUG = process.env.DEBUG_POOL === '1';
+const log = (...a) => DEBUG && console.log('[pool]', ...a);
+
+function fmtDuration(ms) {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const ss = (s % 60).toString().padStart(2, '0');
+  if (m < 60) return `${m}m${ss}s`;
+  const h = Math.floor(m / 60);
+  const mm = (m % 60).toString().padStart(2, '0');
+  return `${h}h${mm}m${ss}s`;
+}
+
+function etaString(done, total, startMs) {
+  if (done === 0) return '–';
+  const elapsed = Date.now() - startMs;
+  const remaining = (elapsed / done) * (total - done);
+  return fmtDuration(remaining);
+}
+
 async function runPool(jobs, worker) {
+  log('entering runPool, jobs=' + jobs.length + ' concurrency=' + CONCURRENCY);
   const queue = [...jobs];
   const inflight = new Set();
   let cached = 0;
   let encoded = 0;
   let missing = 0;
+  let errored = 0;
+  const errorSamples = [];
+  const start = Date.now();
 
   async function next() {
     const job = queue.shift();
-    if (!job) return;
-    const p = worker(job).then((res) => {
+    if (!job) {
+      log('next: queue empty');
+      return;
+    }
+    log('next: starting job ' + job.imageId + ' (queue now ' + queue.length + ')');
+    const p = (async () => {
+      let res;
+      try {
+        res = await worker(job);
+      } catch (err) {
+        res = { status: 'errored', imageId: job.imageId, src: job.src, error: err?.message || String(err) };
+      }
+      log('next: job ' + job.imageId + ' -> ' + res.status);
       if (res.status === 'cached') cached += 1;
       else if (res.status === 'encoded') encoded += 1;
       else if (res.status === 'missing') {
         missing += 1;
-        console.warn(`  missing source: ${res.src}`);
+        if (missing <= 5) console.warn(`  missing source: ${res.src}`);
+      } else if (res.status === 'errored') {
+        errored += 1;
+        if (errorSamples.length < 5) errorSamples.push(`${res.imageId} (${res.src}): ${res.error}`);
       }
-      const done = cached + encoded + missing;
+      const done = cached + encoded + missing + errored;
       if (done % 25 === 0 || done === jobs.length) {
-        process.stdout.write(`\r  processed ${done}/${jobs.length} (encoded ${encoded}, cached ${cached}, missing ${missing})`);
+        const elapsed = fmtDuration(Date.now() - start);
+        const eta = etaString(done, jobs.length, start);
+        process.stdout.write(
+          `\r  processed ${done}/${jobs.length} ` +
+          `(encoded ${encoded}, cached ${cached}, missing ${missing}, errored ${errored}) ` +
+          `· ${elapsed} elapsed · ${eta} eta   `,
+        );
       }
-    }).finally(() => {
+    })().finally(() => {
+      log('finally: removing ' + job.imageId + ' from inflight (size=' + inflight.size + ')');
       inflight.delete(p);
     });
     inflight.add(p);
   }
 
+  log('initial fill');
   for (let i = 0; i < Math.min(CONCURRENCY, jobs.length); i++) await next();
+  log('initial fill done, inflight=' + inflight.size);
   while (inflight.size > 0) {
+    log('awaiting race, inflight=' + inflight.size + ', queue=' + queue.length);
     await Promise.race(inflight);
+    log('race resolved, inflight=' + inflight.size);
     await next();
   }
+  log('loop exit');
   process.stdout.write('\n');
-  return { cached, encoded, missing };
+  return { cached, encoded, missing, errored, errorSamples };
 }
 
 async function main() {
@@ -238,7 +321,7 @@ async function main() {
     return;
   }
 
-  console.log(`process_images: ${jobs.length} images, concurrency=${CONCURRENCY}`);
+  console.log(`process_images: ${jobs.length} images, concurrency=${CONCURRENCY} (cpus=${cpus().length}, sharp.concurrency=1)`);
   console.log(`  build_dir: ${buildDir}`);
   const cache = await readJson(cachePath, {});
   const results = {};
@@ -248,8 +331,17 @@ async function main() {
   await writeFile(metaPath, JSON.stringify(results, null, 2));
   await writeFile(cachePath, JSON.stringify(cache, null, 2));
 
-  console.log(`  encoded ${summary.encoded}, cached ${summary.cached}, missing ${summary.missing}`);
+  console.log(`  encoded ${summary.encoded}, cached ${summary.cached}, missing ${summary.missing}, errored ${summary.errored}`);
+  console.log(`  results entries: ${Object.keys(results).length}`);
   console.log(`  wrote ${metaPath}`);
+  if (summary.errored > 0) {
+    console.log(`  first ${summary.errorSamples.length} errors:`);
+    for (const e of summary.errorSamples) console.log(`    ${e}`);
+    process.exit(1);
+  }
+  if (summary.missing > 0) {
+    console.log(`  (use a fresh smugmug_download run to fill in missing sources)`);
+  }
 }
 
 main().catch((err) => {
