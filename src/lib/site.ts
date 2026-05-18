@@ -54,7 +54,7 @@ export function loadSite(): SiteConfig {
   if (!baseRaw) {
     throw new Error(
       `Missing ${sitePath}. Create it from .site.example.yaml in this repo ` +
-      `and fill in site_url and name.`,
+      `and fill in site_url and name (assets_base_url too once you have R2 set up).`,
     );
   }
 

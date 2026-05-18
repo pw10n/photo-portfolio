@@ -76,8 +76,8 @@ export async function loadSite() {
     if (err.code === 'ENOENT') {
       throw new Error(
         `Missing ${path}.\n` +
-        `Create it from .site.example.yaml in this repo and fill in site_url, ` +
-        `assets_base_url, and name.`,
+        `Create it from .site.example.yaml in this repo and fill in site_url and name ` +
+        `(assets_base_url too if you've set up your R2 custom domain).`,
       );
     }
     throw err;
@@ -108,8 +108,8 @@ export function loadSiteSync() {
     if (err.code === 'ENOENT') {
       throw new Error(
         `Missing ${sitePath}.\n` +
-        `Create it from .site.example.yaml in this repo and fill in site_url, ` +
-        `assets_base_url, and name.`,
+        `Create it from .site.example.yaml in this repo and fill in site_url and name ` +
+        `(assets_base_url too if you've set up your R2 custom domain).`,
       );
     }
     throw err;
