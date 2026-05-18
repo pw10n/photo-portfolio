@@ -222,6 +222,24 @@ async function collectJobs(contentDir) {
 const DEBUG = process.env.DEBUG_POOL === '1';
 const log = (...a) => DEBUG && console.log('[pool]', ...a);
 
+function fmtDuration(ms) {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const ss = (s % 60).toString().padStart(2, '0');
+  if (m < 60) return `${m}m${ss}s`;
+  const h = Math.floor(m / 60);
+  const mm = (m % 60).toString().padStart(2, '0');
+  return `${h}h${mm}m${ss}s`;
+}
+
+function etaString(done, total, startMs) {
+  if (done === 0) return '–';
+  const elapsed = Date.now() - startMs;
+  const remaining = (elapsed / done) * (total - done);
+  return fmtDuration(remaining);
+}
+
 async function runPool(jobs, worker) {
   log('entering runPool, jobs=' + jobs.length + ' concurrency=' + CONCURRENCY);
   const queue = [...jobs];
@@ -231,6 +249,7 @@ async function runPool(jobs, worker) {
   let missing = 0;
   let errored = 0;
   const errorSamples = [];
+  const start = Date.now();
 
   async function next() {
     const job = queue.shift();
@@ -258,7 +277,13 @@ async function runPool(jobs, worker) {
       }
       const done = cached + encoded + missing + errored;
       if (done % 25 === 0 || done === jobs.length) {
-        process.stdout.write(`\r  processed ${done}/${jobs.length} (encoded ${encoded}, cached ${cached}, missing ${missing}, errored ${errored})`);
+        const elapsed = fmtDuration(Date.now() - start);
+        const eta = etaString(done, jobs.length, start);
+        process.stdout.write(
+          `\r  processed ${done}/${jobs.length} ` +
+          `(encoded ${encoded}, cached ${cached}, missing ${missing}, errored ${errored}) ` +
+          `· ${elapsed} elapsed · ${eta} eta   `,
+        );
       }
     })().finally(() => {
       log('finally: removing ' + job.imageId + ' from inflight (size=' + inflight.size + ')');
