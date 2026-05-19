@@ -252,6 +252,8 @@ function runWranglerDeploy() {
 }
 
 async function main() {
+  const skipR2 = process.argv.includes('--skip-r2');
+
   checkEnv();
   const { contentDir, buildDir, repoRoot } = await loadConfig();
 
@@ -263,33 +265,37 @@ async function main() {
     process.exit(1);
   }
 
-  const bucket = process.env.R2_BUCKET;
-  const cachePath = resolve(buildDir, 'upload-cache.json');
-  const cache = await readJson(cachePath, {});
+  if (skipR2) {
+    console.log('publish: skipping R2 sync (--skip-r2)');
+  } else {
+    const bucket = process.env.R2_BUCKET;
+    const cachePath = resolve(buildDir, 'upload-cache.json');
+    const cache = await readJson(cachePath, {});
 
-  console.log('publish: collecting upload jobs');
-  const jobs = await collectJobs({ contentDir, buildDir, repoRoot });
-  const derivJobs = jobs.filter((j) => j.kind === 'derivative').length;
-  const origJobs = jobs.filter((j) => j.kind === 'original').length;
-  console.log(`  ${derivJobs} derivatives, ${origJobs} originals (total ${jobs.length})`);
-  console.log(`  bucket: ${bucket}  concurrency: ${CONCURRENCY}`);
-  console.log(`  cache:  ${cachePath} (${Object.keys(cache).length} entries)`);
+    console.log('publish: collecting upload jobs');
+    const jobs = await collectJobs({ contentDir, buildDir, repoRoot });
+    const derivJobs = jobs.filter((j) => j.kind === 'derivative').length;
+    const origJobs = jobs.filter((j) => j.kind === 'original').length;
+    console.log(`  ${derivJobs} derivatives, ${origJobs} originals (total ${jobs.length})`);
+    console.log(`  bucket: ${bucket}  concurrency: ${CONCURRENCY}`);
+    console.log(`  cache:  ${cachePath} (${Object.keys(cache).length} entries)`);
 
-  const s3 = makeS3Client();
+    const s3 = makeS3Client();
 
-  console.log('\npublish: uploading');
-  const summary = await runUploads(jobs, s3, bucket, cache, cachePath);
-  console.log(
-    `\n✓ uploaded ${summary.uploaded}, cached ${summary.cached}, ` +
-      `missing ${summary.missing}, errored ${summary.errored}`,
-  );
-  if (summary.errorSamples.length > 0) {
-    console.error('first errors:');
-    for (const s of summary.errorSamples) console.error(`  ${s}`);
-    process.exit(1);
-  }
-  if (summary.missing > 0) {
-    console.warn(`warning: ${summary.missing} source files missing — uploads incomplete`);
+    console.log('\npublish: uploading');
+    const summary = await runUploads(jobs, s3, bucket, cache, cachePath);
+    console.log(
+      `\n✓ uploaded ${summary.uploaded}, cached ${summary.cached}, ` +
+        `missing ${summary.missing}, errored ${summary.errored}`,
+    );
+    if (summary.errorSamples.length > 0) {
+      console.error('first errors:');
+      for (const s of summary.errorSamples) console.error(`  ${s}`);
+      process.exit(1);
+    }
+    if (summary.missing > 0) {
+      console.warn(`warning: ${summary.missing} source files missing — uploads incomplete`);
+    }
   }
 
   console.log('\npublish: deploying Pages bundle');
