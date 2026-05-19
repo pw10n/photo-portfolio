@@ -12,6 +12,11 @@ interface Props {
 const { title, description, ogImage, noindex } = Astro.props;
 const site = loadSite();
 const fullTitle = title === site.name ? title : `${title} — ${site.name}`;
+const [logoFirst, ...logoRestArr] = site.short_name.split(' ');
+const logoLast = logoRestArr.join(' ');
+const logoSub = site.name.startsWith(site.short_name)
+  ? site.name.slice(site.short_name.length).trim()
+  : '';
 const year = new Date().getFullYear();
 const copyrightLine = site.copyright_holder
   ? `© ${year} ${site.copyright_holder}`
@@ -35,7 +40,9 @@ const copyrightLine = site.copyright_holder
   <body>
     <header class="site-header">
       <div class="container">
-        <h1><a href="/">{site.name}</a></h1>
+        <a href="/" class="site-logo" aria-label={site.name}>
+          <span class="logo-first">{logoFirst}</span>{logoLast && <span class="logo-rest"> {logoLast}</span>}{logoSub && <span class="logo-sub">{logoSub}</span>}<span class="logo-arrow"> ›</span>
+        </a>
       </div>
     </header>
     <main class="container">
