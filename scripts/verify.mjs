@@ -244,11 +244,12 @@ async function checkRedirects() {
     return { name: '_redirects present', failures };
   }
   const text = await readFile(path, 'utf8');
-  if (!/\/\*\/i-:key\s+\/:splat\/index\.html\s+200/.test(text)) {
-    failures.push('_redirects missing `/*/i-:key /:splat/index.html 200`');
+  // Verify depth-2 named-param rules (covers the most common album path depth).
+  if (!/:p1\/:p2\/i-:key\s+\/:p1\/:p2\/index\.html\s+200/.test(text)) {
+    failures.push('_redirects missing `/:p1/:p2/i-:key /:p1/:p2/index.html 200`');
   }
-  if (!/\/\*\/i-:key\/\*\s+\/:splat\/index\.html\s+200/.test(text)) {
-    failures.push('_redirects missing `/*/i-:key/* /:splat/index.html 200`');
+  if (!/:p1\/:p2\/:p3\/i-:key\s+\/:p1\/:p2\/:p3\/index\.html\s+200/.test(text)) {
+    failures.push('_redirects missing `/:p1/:p2/:p3/i-:key /:p1/:p2/:p3/index.html 200`');
   }
   return { name: '_redirects present', failures };
 }
