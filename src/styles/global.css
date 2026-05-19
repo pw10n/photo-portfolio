@@ -5,6 +5,7 @@
   --muted: #6b6b6b;
   --border: #e3e3e3;
   --accent: #2b2b2b;
+  --logo-accent: #0063B2;
   --gap: 1rem;
   --gap-lg: 2rem;
   --max-width: 1400px;
@@ -21,6 +22,7 @@
     --muted: #9a9a9a;
     --border: #2a2a2a;
     --accent: #f0f0f0;
+    --logo-accent: #0063B2;
   }
 }
 
@@ -68,12 +70,44 @@ picture {
   margin-bottom: var(--gap-lg);
 }
 
-.site-header h1 {
-  font-family: var(--font-serif);
-  font-size: 1.25rem;
-  font-weight: 500;
-  margin: 0;
-  letter-spacing: 0.02em;
+.site-logo {
+  display: inline-flex;
+  align-items: flex-end;
+  text-decoration: none;
+  font-family: var(--font-sans);
+  font-size: 1.1rem;
+  font-weight: 900;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  line-height: 1;
+}
+
+.site-logo:hover {
+  text-decoration: none;
+}
+
+.logo-first {
+  color: var(--muted);
+}
+
+.logo-rest {
+  color: var(--logo-accent);
+}
+
+.logo-sub {
+  color: #ffffff;
+  font-size: 0.45em;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  margin-left: 0.3em;
+  margin-bottom: 0.1em;
+  align-self: flex-end;
+}
+
+.logo-arrow {
+  color: var(--logo-accent);
+  font-size: 1.2em;
+  line-height: 1;
 }
 
 .site-footer {
