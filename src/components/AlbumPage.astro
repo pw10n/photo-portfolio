@@ -6,6 +6,7 @@ import Lightbox from './Lightbox.tsx';
 import PasswordGate from './PasswordGate.tsx';
 import { loadImageMeta, type ImageMetaEntry } from '../lib/image-meta';
 import { legacyKeysForAlbum } from '../lib/legacy-keys';
+import { buildImagePath } from '../lib/url-state';
 
 interface Props {
   album: Album;
@@ -76,8 +77,8 @@ const isGated = album.security_type === 'password';
       <ul class="thumb-grid" id="album-thumbs">
         {album.images.map((img, i) => (
           <li>
-            <button
-              type="button"
+            <a
+              href={buildImagePath(album.url_path, img.image_id)}
               class="thumb-trigger"
               data-image-id={img.image_id}
               data-index={i}
@@ -90,7 +91,7 @@ const isGated = album.security_type === 'password';
                   loading={i < 8 ? 'eager' : 'lazy'}
                 />
               </div>
-            </button>
+            </a>
           </li>
         ))}
       </ul>
@@ -171,6 +172,8 @@ const isGated = album.security_type === 'password';
     border: 0;
     background: transparent;
     cursor: pointer;
+    text-decoration: none;
+    color: inherit;
   }
   .thumb-trigger:focus-visible {
     outline: 2px solid var(--fg);
