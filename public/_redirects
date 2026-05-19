@@ -1,4 +1,3 @@
-# Per-album photo URL rewrite rules are generated at build time by
-# scripts/generate_photo_redirects.mjs and appended to dist/_redirects.
-# Do not add generic /:p1/:p2/i-:key rules here — Cloudflare Pages does not
-# reliably substitute multiple named params in destinations.
+# Photo URL routing (/album/path/i-imageId) is handled by the Cloudflare Pages
+# Function at functions/[[path]].js, which only runs for URLs with no matching
+# static file. No _redirects rules are needed for photo URLs.
