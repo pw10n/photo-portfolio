@@ -1,20 +1,4 @@
-# Preserve legacy SmugMug deep-link URLs.
-# `:key` may be a native image_id (11-char lowercase base32) or a legacy SmugMug
-# image_key; the lightbox island resolves either form. The trailing wildcard
-# absorbs SmugMug size suffixes (`/A`, `/L`, `/M`, `/X2`, `/X3`, ...).
-# Status 200 = rewrite (URL preserved in the browser).
-#
-# Named params (`:p1`, `:p2`, ...) each match exactly one path segment, which is
-# reliable in Cloudflare Pages. Albums nest 2–4 segments deep.
-
-# depth 2: /Folder/Album/i-key[/size]
-/:p1/:p2/i-:key      /:p1/:p2/index.html   200
-/:p1/:p2/i-:key/*    /:p1/:p2/index.html   200
-
-# depth 3: /Folder/Sub/Album/i-key[/size]
-/:p1/:p2/:p3/i-:key      /:p1/:p2/:p3/index.html   200
-/:p1/:p2/:p3/i-:key/*    /:p1/:p2/:p3/index.html   200
-
-# depth 4: /Folder/Sub/Sub/Album/i-key[/size]
-/:p1/:p2/:p3/:p4/i-:key      /:p1/:p2/:p3/:p4/index.html   200
-/:p1/:p2/:p3/:p4/i-:key/*    /:p1/:p2/:p3/:p4/index.html   200
+# Per-album photo URL rewrite rules are generated at build time by
+# scripts/generate_photo_redirects.mjs and appended to dist/_redirects.
+# Do not add generic /:p1/:p2/i-:key rules here — Cloudflare Pages does not
+# reliably substitute multiple named params in destinations.

@@ -76,6 +76,7 @@ async function main() {
     await stripLocalDerivativesSymlink();
   }
   await step('astro build', 'npx', ['--no-install', 'astro', 'build']);
+  await step('photo_redirects', 'node', ['scripts/generate_photo_redirects.mjs']);
   await step('verify', 'node', ['scripts/verify.mjs']);
   const totalSecs = ((Date.now() - totalStart) / 1000).toFixed(1);
   console.log(`\n✓ build complete in ${totalSecs}s`);
