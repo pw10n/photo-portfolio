@@ -9,20 +9,18 @@ interface Props {
 
 const { albums, folders } = Astro.props;
 
-const RECENT_COUNT = 12;
+const INITIAL_COUNT = 12;
+const BATCH_SIZE = 12;
 
-const sortedAlbums = [...albums]
+const allSortedAlbums = [...albums]
   .filter((a) => a.images.length > 0)
   .sort((a, b) => {
     const da = a.date ?? '';
     const db = b.date ?? '';
     return db.localeCompare(da);
-  })
-  .slice(0, RECENT_COUNT);
+  });
 
-const topLevelFolders = folders.filter(
-  (f) => f.parent_path === null || f.parent_path === '/' || f.parent_path === '',
-);
+const initialAlbums = allSortedAlbums.slice(0, INITIAL_COUNT);
 
 function heroImageIdFor(album: Album): string | null {
   if (album.images.length === 0) return null;
@@ -32,14 +30,42 @@ function heroImageIdFor(album: Album): string | null {
   }
   return album.images[0].image_id;
 }
+
+const assetsBase = (import.meta.env.PUBLIC_ASSETS_BASE_URL ?? '').replace(/\/+$/, '');
+
+const remainingData = allSortedAlbums.slice(INITIAL_COUNT).map((album) => ({
+  url_path: album.url_path,
+  name: album.name,
+  date: album.date ?? null,
+  heroId: heroImageIdFor(album),
+}));
+
+const topLevelFolders = folders.filter(
+  (f) => f.parent_path === null || f.parent_path === '/' || f.parent_path === '',
+);
 ---
 
 {
-  sortedAlbums.length > 0 && (
+  topLevelFolders.length > 0 && (
+    <section class="home-section">
+      <h2>Browse</h2>
+      <ul class="folder-list">
+        {topLevelFolders.map((f) => (
+          <li>
+            <a href={f.url_path}>{f.name}</a>
+          </li>
+        ))}
+      </ul>
+    </section>
+  )
+}
+
+{
+  initialAlbums.length > 0 && (
     <section class="home-section">
       <h2>Recently Added</h2>
-      <ul class="thumb-grid">
-        {sortedAlbums.map((album, i) => {
+      <ul class="thumb-grid" id="recent-grid">
+        {initialAlbums.map((album, i) => {
           const heroId = heroImageIdFor(album);
           return (
             <li>
@@ -62,27 +88,94 @@ function heroImageIdFor(album: Album): string | null {
           );
         })}
       </ul>
+      {remainingData.length > 0 && <div id="scroll-sentinel" aria-hidden="true" />}
     </section>
   )
 }
 
-{
-  topLevelFolders.length > 0 && (
-    <section class="home-section">
-      <h2>Browse</h2>
-      <ul class="folder-list">
-        {topLevelFolders.map((f) => (
-          <li>
-            <a href={f.url_path}>{f.name}</a>
-          </li>
-        ))}
-      </ul>
-    </section>
-  )
-}
-
-{sortedAlbums.length === 0 && topLevelFolders.length === 0 && (
+{allSortedAlbums.length === 0 && topLevelFolders.length === 0 && (
   <p class="empty">No content yet. Once `npm run build` runs against a populated content repo, albums will appear here.</p>
+)}
+
+{remainingData.length > 0 && (
+  <script define:vars={{ remainingData, BATCH_SIZE, assetsBase }}>
+    (() => {
+      const queue = [...remainingData];
+      const grid = document.getElementById('recent-grid');
+      const sentinel = document.getElementById('scroll-sentinel');
+      if (!grid || !sentinel) return;
+
+      function thumbUrl(imageId, fmt) {
+        return `${assetsBase}/derivatives/${imageId}/thumb.${fmt}`;
+      }
+
+      function makeCard(item) {
+        const li = document.createElement('li');
+        const a = document.createElement('a');
+        a.href = item.url_path;
+
+        const div = document.createElement('div');
+        div.className = 'thumb';
+
+        if (item.heroId) {
+          const picture = document.createElement('picture');
+
+          for (const [type, fmt] of [['image/avif', 'avif'], ['image/webp', 'webp']]) {
+            const src = document.createElement('source');
+            src.type = type;
+            src.srcset = thumbUrl(item.heroId, fmt);
+            picture.appendChild(src);
+          }
+
+          const img = document.createElement('img');
+          img.src = thumbUrl(item.heroId, 'jpg');
+          img.alt = item.name;
+          img.width = 200;
+          img.height = 200;
+          img.loading = 'lazy';
+          img.decoding = 'async';
+          picture.appendChild(img);
+          div.appendChild(picture);
+        }
+
+        const label = document.createElement('span');
+        label.className = 'thumb-label';
+        label.textContent = item.name;
+
+        if (item.date) {
+          const meta = document.createElement('span');
+          meta.className = 'meta';
+          meta.textContent = item.date;
+          label.appendChild(meta);
+        }
+
+        a.appendChild(div);
+        a.appendChild(label);
+        li.appendChild(a);
+        return li;
+      }
+
+      function loadBatch() {
+        const batch = queue.splice(0, BATCH_SIZE);
+        const fragment = document.createDocumentFragment();
+        batch.forEach((item) => fragment.appendChild(makeCard(item)));
+        grid.appendChild(fragment);
+        if (queue.length === 0) {
+          observer.disconnect();
+          sentinel.remove();
+        }
+      }
+
+      const observer = new IntersectionObserver(
+        (entries) => {
+          if (entries[0].isIntersecting) loadBatch();
+        },
+        { rootMargin: '200px' },
+      );
+
+      observer.observe(sentinel);
+    })();
+  </script>
 )}
 
 <style>
@@ -114,5 +207,8 @@ function heroImageIdFor(album: Album): string | null {
   .empty {
     color: var(--muted);
     padding: 2rem 0;
+  }
+  #scroll-sentinel {
+    height: 1px;
   }
 </style>
