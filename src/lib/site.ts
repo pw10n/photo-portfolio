@@ -10,6 +10,7 @@ export type SiteConfig = {
   short_name: string;
   tagline: string;
   copyright_holder: string;
+  cf_analytics_token: string;
   homepage: { hero_title: string; hero_subtitle: string };
 };
 
@@ -83,6 +84,7 @@ export function loadSite(): SiteConfig {
     short_name: (raw.short_name as string) ?? (raw.name as string),
     tagline: (raw.tagline as string) ?? '',
     copyright_holder: (raw.copyright_holder as string) ?? '',
+    cf_analytics_token: (raw.cf_analytics_token as string) ?? '',
     homepage: {
       hero_title: homepage.hero_title ?? '',
       hero_subtitle: homepage.hero_subtitle ?? '',

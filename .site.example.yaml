@@ -19,6 +19,10 @@ short_name: "Example"            # optional; defaults to name
 tagline: "A selection of recent work."
 copyright_holder: "Your Name Here"
 
+# Cloudflare Web Analytics token (optional).
+# Find it under your site's Web Analytics dashboard on Cloudflare.
+# cf_analytics_token: "your-token-here"
+
 homepage:
   hero_title: "Photography"
   hero_subtitle: "A selection of recent work."

@@ -36,6 +36,9 @@ const copyrightLine = site.copyright_holder
     {description && <meta property="og:description" content={description} />}
     {ogImage && <meta property="og:image" content={ogImage} />}
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    {site.cf_analytics_token && (
+      <script defer src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon={`{"token":"${site.cf_analytics_token}"}`}></script>
+    )}
   </head>
   <body>
     <header class="site-header">
